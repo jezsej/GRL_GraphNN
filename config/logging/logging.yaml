@@ -1,1 +1,3 @@
-run_name: experiment_1
+run_name: loso_abide
+project: domain_adaptation_abide
+entity: eggroup

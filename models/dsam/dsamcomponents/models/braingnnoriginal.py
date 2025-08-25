@@ -13,7 +13,7 @@ from .bgnngingraphconv import MyGINConv
 
 ##########################################################################################################################
 class Network(torch.nn.Module):
-    def __init__(self, indim, ratio, nclass, n_hidden_layers, n_fc_layers, k=7, dropout=0.2, R=100):
+    def __init__(self, indim, ratio, nclass, n_hidden_layers, n_fc_layers, k=7, dropout=0.2, R=200):
         # self, indim, ratio, nclass, n_hidden_layers, n_fc_layers, k, fc_dropout=0.2,R=100
         '''
 

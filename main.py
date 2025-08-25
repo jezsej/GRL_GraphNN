@@ -1,5 +1,6 @@
 import torch
 import hydra
+import wandb
 from omegaconf import DictConfig, OmegaConf
 from data.loaders.abide_loader import get_abide_dataloaders
 from models import model_factory
@@ -9,6 +10,13 @@ from utils.logging_utils import setup_wandb
 
 @hydra.main(version_base=None, config_path="config", config_name="config")
 def main(cfg: DictConfig):
+    run = wandb.init(
+        project=cfg.logging.project,
+        entity=cfg.logging.entity,
+        name=cfg.logging.run_name,
+        config=OmegaConf.to_container(cfg, resolve=True),
+        reinit=True
+    )
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
     # Dynamic run name update
@@ -36,6 +44,7 @@ def main(cfg: DictConfig):
     )
 
     trainer.train_loso(site_graphs)
+    run.finish()
 
 
 if __name__ == '__main__':

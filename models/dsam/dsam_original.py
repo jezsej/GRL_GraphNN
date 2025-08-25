@@ -92,7 +92,7 @@ class FNCCustomMultiheadAttention(nn.Module):
         return attn_weights
 
     
-class SpatioTemporalModel(nn.Module):
+class SpatioTemporalModel(nn.Module, ):
     def __init__(self, cfg, dataloader):
         super(SpatioTemporalModel, self).__init__()
 
@@ -176,7 +176,7 @@ class SpatioTemporalModel(nn.Module):
             n_layers = [int(float(numeric_string)) for numeric_string in str(self.n_bgnn_layers[0]).split(',')]
             n_fc_layers = [int(float(numeric_string)) for numeric_string in str(self.n_fc_layers[0]).split(',')]
             
-            self.meta_layer = Network(self.num_nodes,self.bgnn_ratio,1,n_layers,n_fc_layers,self.n_clustered_communities, self.dropout).to(device)
+            self.meta_layer = Network(self.num_nodes,self.bgnn_ratio,2,n_layers,n_fc_layers,self.n_clustered_communities, self.dropout).to(device)
             # self.meta_layer = Network(cfg.model.fnc_embed_dim,self.bgnn_ratio,1,n_layers,n_fc_layers,self.n_clustered_communities, self.dropout).to(device)
 
         if self.conv_strategy == ConvStrategy.TCN_ENTIRE:
@@ -354,3 +354,64 @@ class SpatioTemporalModel(nn.Module):
         x, allpools, scores, edge_attr = self.meta_layer(x, edge_index_tensor, batch_tensor, new_edge_attr,pseudo_torch)
 
         return x, allpools, scores, sfnc_matrix, corr
+    
+    def extract_features(self, data, time_series, edge_index_tensor, edge_attr_tensor, node_feature, pseudo_torch, batch_tensor):
+        """Extract features from the model without updating edge attributes."""
+        device = 'cuda:0' if torch.cuda.is_available() else 'cpu'
+
+        # 1. Temporal TCN
+        x = time_series.view(-1, 1, self.num_time_length)
+        x = self.temporal_conv1(x)
+
+        batch_size = len(data.y)
+        x = x.view(batch_size, self.num_nodes, 3, self.num_time_length)
+        x = x.permute(0, 2, 1, 3).contiguous().view(batch_size, self.num_nodes, -1)
+
+        # 2. Extract low/mid/high levels
+        original_number_timepoints = self.num_time_length
+        low_level = x[:, :, :original_number_timepoints]
+        medium_level = x[:, :, original_number_timepoints:original_number_timepoints*2]
+        high_level = x[:, :, original_number_timepoints*2:]
+
+        # 3. Apply Transformer Attention
+        low_transformer_output = self.timepointattention(low_level) 
+        medium_transformer_output = self.timepointattention(medium_level)  
+        high_transformer_output = self.timepointattention(high_level)  
+
+        # 4. Select Top-K timepoints
+        num_timepoints = low_level.size(2)
+        top_k = int(num_timepoints * (self.attention_threshold / 100))  
+        low_level_topk = self.select_top_k_timepoints(low_level, low_transformer_output, top_k)
+        medium_level_topk = self.select_top_k_timepoints(medium_level, medium_transformer_output, top_k)
+        high_level_topk = self.select_top_k_timepoints(high_level, high_transformer_output, top_k)
+
+        final_output = torch.cat((low_level_topk, medium_level_topk, high_level_topk), dim=2)
+
+        # 5. Compute sFNC + attention
+        sfnc_matrix = self.compute_sfnc_attention(final_output)
+        corr = self.fnc_attention_module(final_output)
+
+        # 6. Dynamically update edge weights
+        if self.dynamic:
+            edge_src, edge_dst = edge_index_tensor[0, :], edge_index_tensor[1, :]
+            batch_indices_src = batch_tensor[edge_src]
+            batch_indices_dst = batch_tensor[edge_dst]
+
+            if not torch.equal(batch_indices_src, batch_indices_dst):
+                raise ValueError("Edges connect nodes from different batches.")
+
+            batch_indices = batch_indices_src
+            num_nodes_per_sample = sfnc_matrix.size(1)
+
+            node_i_sample = edge_src - batch_indices * num_nodes_per_sample
+            node_j_sample = edge_dst - batch_indices * num_nodes_per_sample
+            sfnc_values = sfnc_matrix[batch_indices, node_i_sample, node_j_sample]
+
+            new_edge_attr = sfnc_values.unsqueeze(1)
+        else:
+            new_edge_attr = torch.abs(edge_attr_tensor)
+
+        # 7. Final reshaped features (pre-classifier)
+        x = corr.reshape(-1, corr.shape[-1]).to(device)
+
+        return x

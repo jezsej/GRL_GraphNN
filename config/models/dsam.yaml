@@ -23,6 +23,8 @@ tcn_final_transform_layers: 1
 tcn_hidden_units: 8
 tcn_norm_strategy:  batchnorm # weight
 temporal_embed_size: 32
+patience: 35
+min_delta: 0.001
 
 
 #No change in hyperparams

@@ -39,6 +39,29 @@ class LOSOTrainer:
         self.best_model_path = os.path.join("checkpoints", "best_model")
         os.makedirs(self.best_model_path, exist_ok=True)
 
+    def model_forward(self, batch):
+        if self.config.models.name == "SpatioTemporalModel":
+            
+            num_nodes = self.config.dataset.num_nodes
+            batch_size = batch.num_graphs
+            device = batch.x.device
+
+            identity = torch.eye(num_nodes, device=device)
+            pseudo = identity.unsqueeze(0).expand(batch_size, -1, -1).reshape(-1, num_nodes)
+            batch.pseudo = pseudo
+            
+            return self.model(
+                batch,
+                batch.time_series,
+                batch.edge_index,
+                batch.edge_attr,
+                batch.x,
+                batch.pseudo,
+                batch.batch
+            )
+        else:
+            return self.model(batch)
+
     def stratified_split(self, site_graphs, val_split):
         labels = [g.y.item() for g in site_graphs]
         sss = StratifiedShuffleSplit(n_splits=1, test_size=val_split, random_state=42)
@@ -48,7 +71,16 @@ class LOSOTrainer:
         val_graphs = [site_graphs[i] for i in val_idx]
         return train_graphs, val_graphs
 
+    def log_distribution(self, name, graphs):
+        labels = [g.y.item() for g in graphs]
+        total = len(labels)
+        asd = labels.count(1)
+        td = labels.count(0)
+        print(f"[{name}] Total: {total}, ASD: {asd}, TD: {td}")
+        return asd, td
+
     def train_loso(self, site_data):
+        print(f"Training on site: {site_data}...")
         results = {}
         all_y_true = []
         all_y_score = []
@@ -58,15 +90,15 @@ class LOSOTrainer:
             print(f"\n[LOSO] Held-out site: {held_out_site}")
 
             train_graphs, val_graphs, test_graphs = [], [], site_data[held_out_site]
-            domain_labels = []  # Domain labels for domain adaptation
+            domain_labels = []
 
             for i, site in enumerate(self.site_names):
-                if site == held_out_site:  # Skip the held-out site
+                if site == held_out_site:
                     continue
-                site_graphs = site_data[site]  # List of graphs for the site
-                train_split, val_split = self.stratified_split(site_graphs, self.config.dataset.val_split)  # 80-20 split
-                train_graphs.extend(train_split) # Add to training set
-                val_graphs.extend(val_split) # Add to validation set
+                site_graphs = site_data[site]
+                train_split, val_split = self.stratified_split(site_graphs, self.config.dataset.val_split)
+                train_graphs.extend(train_split)
+                val_graphs.extend(val_split)
                 domain_labels.extend([i] * len(train_split))
 
             train_loader = DataLoader(train_graphs, batch_size=self.config.dataset.batch_size, shuffle=True)
@@ -74,9 +106,22 @@ class LOSOTrainer:
             test_loader = DataLoader(test_graphs, batch_size=self.config.dataset.batch_size, shuffle=False)
             domain_labels = torch.tensor(domain_labels).to(self.device)
 
+            asd_train, td_train = self.log_distribution(f"Train (excluding {held_out_site})", train_graphs)
+            asd_val, td_val = self.log_distribution(f"Val (excluding {held_out_site})", val_graphs)
+            asd_test, td_test = self.log_distribution(f"Test ({held_out_site})", test_graphs)
+            #logging 
+            wandb.log({
+                f"{held_out_site}/train_asd": asd_train,
+                f"{held_out_site}/train_td": td_train,
+                f"{held_out_site}/val_asd": asd_val,
+                f"{held_out_site}/val_td": td_val,
+                f"{held_out_site}/test_asd": asd_test,
+                f"{held_out_site}/test_td": td_test
+            })
+
             best_auc = 0
-            patience = self.config.training.patience
-            min_delta = self.config.training.min_delta
+            patience = self.config.models.patience
+            min_delta = self.config.models.min_delta
             stop_counter = 0
             best_model = None
 
@@ -131,6 +176,7 @@ class LOSOTrainer:
         return results
 
     def train_epoch(self, train_loader, domain_labels):
+        print("Training epoch...")
         self.model.train()
         if self.use_grl:
             self.domain_discriminator.train()
@@ -140,7 +186,7 @@ class LOSOTrainer:
             batch = batch.to(self.device)
             self.optimizer.zero_grad()
 
-            logits = self.model(batch)
+            logits, *_ = self.model_forward(batch)
             loss_cls = F.cross_entropy(logits, batch.y)
 
             if self.use_grl:
@@ -156,35 +202,41 @@ class LOSOTrainer:
             total_loss += loss.item()
 
         return total_loss / len(train_loader)
-
+    
     def validate(self, loader):
+        print("Validating...")
         self.model.eval()
-        all_preds, all_labels, all_probs = [], [], []
+        all_preds, all_labels, all_probs, all_logits = [], [], [], []
         with torch.no_grad():
             for batch in loader:
                 batch = batch.to(self.device)
-                logits = self.model(batch)
+                logits, *_ = self.model_forward(batch)
                 probs = F.softmax(logits, dim=1)[:, 1]
                 preds = torch.argmax(logits, dim=1)
+
                 all_preds.append(preds.cpu())
                 all_labels.append(batch.y.cpu())
                 all_probs.append(probs.cpu())
+                all_logits.append(logits.cpu())
 
         y_pred = torch.cat(all_preds).numpy()
         y_true = torch.cat(all_labels).numpy()
         y_score = torch.cat(all_probs).numpy()
+        loss = F.cross_entropy(torch.cat(all_logits), torch.cat(all_labels)).item()
         auc = roc_auc_score(y_true, y_score)
         acc = accuracy_score(y_true, y_pred)
-        loss = F.cross_entropy(torch.tensor(y_score).unsqueeze(1), torch.tensor(y_true)).item()
-        return auc, loss, acc
 
+        return auc, loss, acc
+    
     def evaluate(self, test_loader, site_name, return_scores=False):
+        print(f"Evaluating on test set of site: {site_name}...")
         self.model.eval()
-        all_preds, all_labels, all_probs, all_features = [], [], [], []
+        all_preds, all_labels, all_probs, all_features, all_logits = [], [], [], [], []
+
         with torch.no_grad():
             for batch in test_loader:
                 batch = batch.to(self.device)
-                logits = self.model(batch)
+                logits = self.model_forward(batch)
                 probs = F.softmax(logits, dim=1)[:, 1]
                 preds = torch.argmax(logits, dim=1)
                 features = self.model.extract_features(batch)
@@ -193,11 +245,14 @@ class LOSOTrainer:
                 all_labels.append(batch.y.cpu())
                 all_probs.append(probs.cpu())
                 all_features.append(features.cpu())
+                all_logits.append(logits.cpu())
 
         y_pred = torch.cat(all_preds).numpy()
         y_true = torch.cat(all_labels).numpy()
         y_score = torch.cat(all_probs).numpy()
         X_feat = torch.cat(all_features).numpy()
+
+        # loss = F.cross_entropy(torch.cat(all_logits), torch.cat(all_labels)).item()
 
         os.makedirs("figures", exist_ok=True)
         roc_path = f"figures/roc_{site_name}.png"

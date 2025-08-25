@@ -1,5 +1,6 @@
 import os
 import torch
+import wandb
 import numpy as np
 import pandas as pd
 from torch_geometric.data import Data
@@ -82,14 +83,11 @@ def get_abide_dataloaders(config) -> (Dict[str, List[Data]], List[str]):
                 print(f"[WARN] Failed to read {ts_path}")
                 continue
             if ts.shape[0] != config.dataset.num_nodes:
-                # print(f"[WARN] Subject {sub_id} has {ts.shape[0]} nodes, expected {config.dataset.num_nodes}")
                 continue
             if ts.shape[1] < T_min:
-                # print(f"[WARN] Subject {sub_id} has {ts.shape[1]} time points, expected {T_min}")
                 continue
 
             ts_tensor = torch.tensor(ts[:, :T_min], dtype=torch.float)
-            # print(f"[DEBUG] Subject {sub_id} time series shape: {ts_tensor.shape}")
 
             # --- Correlation matrix ---
             txt_path = os.path.join(subject_folder, f"{sub_id}_{atlas}_{conn_type}_matrix.txt")
@@ -146,8 +144,9 @@ def get_abide_dataloaders(config) -> (Dict[str, List[Data]], List[str]):
 
             if dynamic:
                 data.time_series = ts_tensor
+                identity = torch.eye(config.dataset.num_nodes)
+                data.pseudo = identity[data.edge_index[0]]
 
-            # print(f"[DEBUG] Created Data for subject {sub_id}: {data}")
             data_list.append(data)
 
         site_data[site] = data_list
@@ -161,7 +160,7 @@ def get_abide_dataloaders(config) -> (Dict[str, List[Data]], List[str]):
     valid_site_data = {k: v for k, v in site_data.items() if len(v) > 0}
     valid_site_names = list(valid_site_data.keys())
 
-        # ----------------------------
+    # ----------------------------
     # Print & Export Dataset Stats
     # ----------------------------
     print("\n[SUMMARY] Dataset Statistics:")
@@ -204,5 +203,5 @@ def get_abide_dataloaders(config) -> (Dict[str, List[Data]], List[str]):
     os.makedirs(os.path.dirname(stats_path), exist_ok=True) # Ensure log directory exists
     stats_df.to_csv(stats_path, index=False) # Save site stats to CSV
     print(f"[SAVED] Site statistics saved to: {stats_path}")
-
+    wandb.log({"abide_site_stats": wandb.Table(dataframe=stats_df)})
     return valid_site_data, valid_site_names

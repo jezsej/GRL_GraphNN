@@ -5,3 +5,6 @@ data/abide
 outputs/*
 results/*
 saved_models/*
+wandb/*
+checkpoints/*
+README.md

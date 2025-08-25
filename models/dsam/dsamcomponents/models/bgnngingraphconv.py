@@ -140,9 +140,13 @@ class MyGINConv(MyMessagePassing):
             edge_index, edge_weight = add_remaining_self_loops(edge_index, edge_weight, 1, x.size(0))
 
         # Apply the nn to transform input features
+        # print("Input shape to Linear:", pseudo.shape)
+        # print("Linear weight shape:", self.nn[0].weight.shape)
         weight = self.nn(pseudo).view(-1, self.in_channels, self.out_channels)
 
         # Transform node features with the weights
+        # print("x.shape:", x.shape)
+        # print("weight.shape:", weight.shape)
         if torch.is_tensor(x):
             x_transformed = torch.matmul(x.unsqueeze(1), weight).squeeze(1)  # W_i * h_i
         else:
