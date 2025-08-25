@@ -32,6 +32,8 @@ if __name__ == "__main__":
         "training.lr": [0.001, 0.0001],
         "model.hidden_dim": [32, 64, 128],
         "model.dropout": [0.0, 0.3, 0.5],
-        "training.weight_decay": [0.0, 0.0001, 0.001]
+        "training.weight_decay": [0.0, 0.0001, 0.001],
+        "domain_adaptation.grl_lambda": [0.1, 0.5, 1.0],
+        "domain_adaptation.domain_loss_weight": [0.5, 1.0, 2.0]
     }
     run_ablation(BASE_CONFIG, ABLATIONS)

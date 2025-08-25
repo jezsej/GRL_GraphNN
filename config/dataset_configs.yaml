@@ -1,4 +1,0 @@
-dataset:
-  root: /path/to/abide/dataset
-  atlas: CC200
-  connectivity: correlation

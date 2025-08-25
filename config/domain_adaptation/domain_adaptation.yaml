@@ -1,0 +1,3 @@
+use_grl: false
+grl_lambda: 1.0
+domain_loss_weight: 1.0

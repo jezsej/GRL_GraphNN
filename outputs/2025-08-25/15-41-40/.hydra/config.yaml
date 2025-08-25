@@ -1,0 +1,108 @@
+dataset:
+  name: abide
+  batch_size: 16
+  test_batch_size: 16
+  val_batch_size: 16
+  train_set: 0.7
+  val_set: 0.1
+  root: /Users/jessessempijja/Documents/Adulting/Education/MSc/Dissertation/Domain
+    Adaptation/data/abide/ABIDE_pcp/cpac/filt_noglobal
+  stratified: true
+  drop_last: true
+  atlas: CC200
+  connectivity: correlation
+  use_h5: false
+  phenotypic_file: /Users/jessessempijja/Documents/Adulting/Education/MSc/Dissertation/Domain
+    Adaptation/data/abide/ABIDE_pcp/Phenotypic_V1_0b_preprocessed1.csv
+  edge_threshold: 75
+  include_ados: true
+  use_1d: true
+  dynamic: true
+  num_nodes: 200
+models:
+  name: SpatioTemporalModel
+  activation: relu
+  param_conv_strategy: tcn_entire
+  channels_conv: 8
+  early_stop_steps: 35
+  final_mlp_layers: 1
+  fold_num: 1
+  n_clustered_communities: 7
+  num_nodes: 200
+  optim: Adam
+  optimiser: adam
+  pnapoolratio: 0.3
+  pooling: concat
+  sweep_type: brain_gnn
+  target_var: gender
+  tcn_depth: 3
+  tcn_final_transform_layers: 1
+  tcn_hidden_units: 8
+  tcn_norm_strategy: batchnorm
+  temporal_embed_size: 32
+  lamb0: 1
+  lamb1: 0
+  lamb2: 0
+  lamb3: 0.1
+  lamb4: 0
+  lamb5: 0
+  layer: 2
+  use_ema: false
+  nodemodel_aggr: all
+  nodemodel_layers: 2
+  nodemodel_scalers: none
+  normalisation: subject_norm
+  tcn_kernel: 7
+  tcn_kernel1: 7
+  tcn_kernel2: 9
+  tcn_kernel3: 7
+  tcn_kernel4: 5
+  dynamic: false
+  threshold: 30
+  timepoints_attnhead: 2
+  totalwarmupsteps: 0
+  weight_decay: 0.0001
+  n_fc_layers:
+  - 32, 512
+  n_layers:
+  - 32,32
+  fnc_attnhead: 4
+  fnc_embed_dim: 128
+  fc_dropout: 0.323
+  dropout: 0.323
+  bgnnratio: 0.85
+  attentionthreshold: 10
+  num_classes: 2
+optimizer:
+  name: Adam
+  lr: 0.0001
+  match_rule: None
+  except_rule: None
+  no_weight_decay: false
+  weight_decay: 0.01
+  lr_scheduler:
+    mode: step
+    base_lr: 0.0004769181473273086
+    target_lr: 2
+    decay_factor: 0.1
+    milestones:
+    - 0.3
+    - 0.6
+    - 0.9
+    poly_power: 2.0
+    lr_decay: 0.98
+    warm_up_from: 0.0
+    warm_up_steps: 0
+training:
+  name: DATrain
+  epochs: 100
+datasz:
+  percentage: 1.0
+preprocess:
+  name: non_mixup
+  continus: true
+repeat_time: 1
+log_path: result
+save_learnable_graph: false
+wandb_entity: eggroup
+project: domainadaptation
