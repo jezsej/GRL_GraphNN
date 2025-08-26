@@ -1,0 +1,22 @@
+program: main.py
+method: grid
+name: GNN_Model_GRL_Sweep
+
+parameters:
+  model.name:
+    values: [dsam] # bnt braingnn dsam
+
+  domain_adaptation.use_grl:
+    values: [false, true]
+
+  domain_adaptation.grl_lambda:
+    values: [0.0, 0.5, 1.0]
+
+  domain_adaptation.domain_loss_weight:
+    values: [0.0, 0.1, 1.0]
+
+  training.lr:
+    values: [0.0005, 0.001]
+
+  training.seed:
+    values: [42, 1337]
