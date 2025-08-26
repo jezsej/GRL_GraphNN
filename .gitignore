@@ -1,0 +1,14 @@
+__pycache__
+.DS_Store
+.vscode/
+README.md
+*.csv
+run.sh
+Dockerfile
+data/abide
+outputs/*
+results/*
+saved_models/*
+wandb/*
+checkpoints/*
+figures/*
