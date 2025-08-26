@@ -45,7 +45,7 @@ COPY evaluation/ /app/evaluation/
 COPY data/ /app/data/
 COPY logs/ /app/logs/
 COPY utils/ /app/utils/
-COPY results/ /app/results/
+COPY result/ /app/result/
 COPY figures/ /app/figures/
 COPY run_loso.py /app/run_loso.py
 COPY run.sh /app/run.sh

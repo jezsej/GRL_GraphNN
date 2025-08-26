@@ -187,8 +187,9 @@ class LOSOTrainer:
         macro_roc_path = "figures/macro_roc.png"
         plot_macro_micro_roc(all_y_true, all_y_score, save_path=macro_roc_path)
 
+        os.makedirs("result/stats", exist_ok=True)
         df = pd.DataFrame(metrics_summary)
-        df.to_csv("metrics_summary.csv", index=False)
+        df.to_csv("result/stats/metrics_summary.csv", index=False)
         print("\n[LOSO] All-site Results:")
         print(df.to_string(index=False))
 
@@ -222,7 +223,26 @@ class LOSOTrainer:
             loss_cls = F.cross_entropy(logits, batch.y)
 
             if self.use_grl:
-                features = self.model.extract_features(batch)
+                features = None
+                if self.config.models.name == "SpatioTemporalModel":
+                    num_nodes = self.config.dataset.num_nodes
+                    batch_size = batch.num_graphs
+                    device = batch.x.device
+                    identity = torch.eye(num_nodes, device=device)
+                    pseudo = identity.unsqueeze(0).expand(batch_size, -1, -1).reshape(-1, num_nodes)
+                    batch.pseudo = pseudo
+
+                    features = self.model.extract_features(
+                        batch,
+                        batch.time_series,
+                        batch.edge_index,
+                        batch.edge_attr,
+                        batch.x,
+                        batch.pseudo,
+                        batch.batch
+                    )
+                else:
+                    features = self.model.extract_features(batch)
                 domain_preds = self.domain_discriminator(features, alpha=self.grl_lambda)
                 loss_domain = self.domain_loss_fn(domain_preds, domain_labels[batch.ptr[:-1]])
                 loss = loss_cls + loss_domain
