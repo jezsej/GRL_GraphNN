@@ -3,27 +3,21 @@ import hydra
 import wandb
 from omegaconf import DictConfig, OmegaConf
 from data.loaders.abide_loader import get_abide_dataloaders
-from models import model_factory
+from models.model_factory import model_factory
 from training.trainers.loso_trainer import LOSOTrainer
 from utils.logging_utils import setup_wandb
 
 
 @hydra.main(version_base=None, config_path="config", config_name="config")
 def main(cfg: DictConfig):
-    run = wandb.init(
-        project=cfg.logging.project,
-        entity=cfg.logging.entity,
-        name=cfg.logging.run_name,
-        config=OmegaConf.to_container(cfg, resolve=True),
-        reinit=True
-    )
+    wandb.init(project=cfg.logging.project, entity=cfg.logging.entity)
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
     # Dynamic run name update
     if cfg.domain_adaptation.use_grl:
-        cfg.logging.run_name = f"{cfg.models.name}_grl_lambda{cfg.domain_adaptation.grl_lambda}"
+        cfg.logging.run_name = f"{cfg.models.alias}-grl_lambda-{cfg.domain_adaptation.grl_lambda}"
     else:
-        cfg.logging.run_name = f"{cfg.models.name}_baseline"
+        cfg.logging.run_name = f"{cfg.models.alias}-baseline"
 
     setup_wandb(cfg)
 
@@ -33,7 +27,7 @@ def main(cfg: DictConfig):
 
     model = model_factory(cfg, site_graphs).to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr=cfg.optimizer.lr)
-    print(f"{model.__class__.__name__} initialized and moved to {device}")
+    print(f"{model.__class__.__name__} initialised and moved to {device}")
 
     trainer = LOSOTrainer(
         model=model,
@@ -44,7 +38,7 @@ def main(cfg: DictConfig):
     )
 
     trainer.train_loso(site_graphs)
-    run.finish()
+
 
 
 if __name__ == '__main__':

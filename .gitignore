@@ -8,3 +8,8 @@ saved_models/*
 wandb/*
 checkpoints/*
 README.md
+*.csv
+run.sh
+docker-compose.yml
+Dockerfile
+figures/*

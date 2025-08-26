@@ -8,6 +8,7 @@ from sklearn.metrics import (
     accuracy_score, roc_auc_score, confusion_matrix,
     f1_score, balanced_accuracy_score
 )
+from omegaconf import DictConfig, OmegaConf
 from sklearn.model_selection import StratifiedShuffleSplit
 from models.domain_adaptation.components import DomainDiscriminator, AdversarialLoss
 from evaluation.visualisation.roc_plot import plot_roc, plot_macro_micro_roc
@@ -30,7 +31,7 @@ class LOSOTrainer:
 
         if self.use_grl:
             self.domain_discriminator = DomainDiscriminator(
-                input_dim=config.model.hidden_dim,
+                input_dim=config.models.hidden_dim,
                 hidden_dim=64,
                 num_domains=len(site_names)
             ).to(device)
@@ -41,7 +42,6 @@ class LOSOTrainer:
 
     def model_forward(self, batch):
         if self.config.models.name == "SpatioTemporalModel":
-            
             num_nodes = self.config.dataset.num_nodes
             batch_size = batch.num_graphs
             device = batch.x.device
@@ -49,7 +49,7 @@ class LOSOTrainer:
             identity = torch.eye(num_nodes, device=device)
             pseudo = identity.unsqueeze(0).expand(batch_size, -1, -1).reshape(-1, num_nodes)
             batch.pseudo = pseudo
-            
+
             return self.model(
                 batch,
                 batch.time_series,
@@ -85,9 +85,16 @@ class LOSOTrainer:
         all_y_true = []
         all_y_score = []
         metrics_summary = []
-
+        run = None
         for held_out_site in self.site_names:
             print(f"\n[LOSO] Held-out site: {held_out_site}")
+            run = wandb.init(
+                project=self.config.logging.project,
+                entity=self.config.logging.entity,
+                name=self.config.logging.run_name+"-site-"+held_out_site,
+                config=OmegaConf.to_container(self.config, resolve=True),
+                reinit=True
+            )
 
             train_graphs, val_graphs, test_graphs = [], [], site_data[held_out_site]
             domain_labels = []
@@ -109,7 +116,6 @@ class LOSOTrainer:
             asd_train, td_train = self.log_distribution(f"Train (excluding {held_out_site})", train_graphs)
             asd_val, td_val = self.log_distribution(f"Val (excluding {held_out_site})", val_graphs)
             asd_test, td_test = self.log_distribution(f"Test ({held_out_site})", test_graphs)
-            #logging 
             wandb.log({
                 f"{held_out_site}/train_asd": asd_train,
                 f"{held_out_site}/train_td": td_train,
@@ -146,6 +152,7 @@ class LOSOTrainer:
                     if stop_counter >= patience:
                         print(f"[Early Stopping] Epoch {epoch} for site {held_out_site}")
                         break
+                print(f"Epoch {epoch}: | Train Loss: {train_loss:.4f} | Val Loss: {val_loss:.4f} | Val AUC: {val_auc:.4f} | Val Acc: {val_acc:.4f} | Best Val AUC: {best_auc:.4f} | Patience: {stop_counter}/{patience} | LR: {self.optimizer.param_groups[0]['lr']:.6f} | GRL Lambda: {self.grl_lambda if self.use_grl else 'N/A'}")
 
             if best_model is not None:
                 torch.save(best_model, os.path.join(self.best_model_path, f"best_model_{held_out_site}.pt"))
@@ -165,6 +172,17 @@ class LOSOTrainer:
                 "balanced_accuracy": bal_acc
             })
 
+            wandb.log({
+                f"{held_out_site}/test_acc": acc,
+                f"{held_out_site}/test_auc": auc,
+                f"{held_out_site}/test_sens": sensitivity,
+                f"{held_out_site}/test_spec": specificity,
+                f"{held_out_site}/test_f1": f1,
+                f"{held_out_site}/test_bal_acc": bal_acc,
+            })
+
+            
+            print(f"[LOSO] Site {held_out_site} - Test Acc: {acc:.4f}, AUC: {auc:.4f}, Sensitivity: {sensitivity:.4f}, Specificity: {specificity:.4f}, F1: {f1:.4f}, Bal. Acc: {bal_acc:.4f}")
         os.makedirs("figures", exist_ok=True)
         macro_roc_path = "figures/macro_roc.png"
         plot_macro_micro_roc(all_y_true, all_y_score, save_path=macro_roc_path)
@@ -173,6 +191,19 @@ class LOSOTrainer:
         df.to_csv("metrics_summary.csv", index=False)
         print("\n[LOSO] All-site Results:")
         print(df.to_string(index=False))
+
+        # Log overall metrics
+        mean_metrics = df.mean(numeric_only=True)
+        wandb.log({
+            "overall/mean_test_acc": mean_metrics["accuracy"],
+            "overall/mean_test_auc": mean_metrics["auc"],
+            "overall/mean_test_sens": mean_metrics["sensitivity"],
+            "overall/mean_test_spec": mean_metrics["specificity"],
+            "overall/mean_test_f1": mean_metrics["f1_score"],
+            "overall/mean_test_bal_acc": mean_metrics["balanced_accuracy"],
+        })
+        if run is not None:
+            run.finish()
         return results
 
     def train_epoch(self, train_loader, domain_labels):
@@ -186,7 +217,8 @@ class LOSOTrainer:
             batch = batch.to(self.device)
             self.optimizer.zero_grad()
 
-            logits, *_ = self.model_forward(batch)
+            out = self.model_forward(batch)
+            logits = out[0] if isinstance(out, tuple) else out
             loss_cls = F.cross_entropy(logits, batch.y)
 
             if self.use_grl:
@@ -200,9 +232,9 @@ class LOSOTrainer:
             loss.backward()
             self.optimizer.step()
             total_loss += loss.item()
-
+        print(f"Training Loss: {total_loss / len(train_loader):.4f} | LR: {self.optimizer.param_groups[0]['lr']:.6f}")
         return total_loss / len(train_loader)
-    
+
     def validate(self, loader):
         print("Validating...")
         self.model.eval()
@@ -210,7 +242,8 @@ class LOSOTrainer:
         with torch.no_grad():
             for batch in loader:
                 batch = batch.to(self.device)
-                logits, *_ = self.model_forward(batch)
+                out = self.model_forward(batch)
+                logits = out[0] if isinstance(out, tuple) else out
                 probs = F.softmax(logits, dim=1)[:, 1]
                 preds = torch.argmax(logits, dim=1)
 
@@ -226,8 +259,10 @@ class LOSOTrainer:
         auc = roc_auc_score(y_true, y_score)
         acc = accuracy_score(y_true, y_pred)
 
+        print(f"AUC: {auc:.4f} | Loss: {loss:.4f} | Acc: {acc:.4f} | LR: {self.optimizer.param_groups[0]['lr']:.6f}")
+
         return auc, loss, acc
-    
+
     def evaluate(self, test_loader, site_name, return_scores=False):
         print(f"Evaluating on test set of site: {site_name}...")
         self.model.eval()
@@ -236,23 +271,43 @@ class LOSOTrainer:
         with torch.no_grad():
             for batch in test_loader:
                 batch = batch.to(self.device)
-                logits = self.model_forward(batch)
+                out = self.model_forward(batch)
+                logits = out[0] if isinstance(out, tuple) else out
                 probs = F.softmax(logits, dim=1)[:, 1]
                 preds = torch.argmax(logits, dim=1)
-                features = self.model.extract_features(batch)
+
+                if self.use_grl:
+                    if self.config.models.name == "SpatioTemporalModel":
+                        num_nodes = self.config.dataset.num_nodes
+                        batch_size = batch.num_graphs
+                        device = batch.x.device
+                        identity = torch.eye(num_nodes, device=device)
+                        pseudo = identity.unsqueeze(0).expand(batch_size, -1, -1).reshape(-1, num_nodes)
+                        batch.pseudo = pseudo
+
+                        features = self.model.extract_features(
+                            batch,
+                            batch.time_series,
+                            batch.edge_index,
+                            batch.edge_attr,
+                            batch.x,
+                            batch.pseudo,
+                            batch.batch
+                        )
+                    else:
+                        features = self.model.extract_features(batch)
+
+                    all_features.append(features.cpu())
 
                 all_preds.append(preds.cpu())
                 all_labels.append(batch.y.cpu())
                 all_probs.append(probs.cpu())
-                all_features.append(features.cpu())
                 all_logits.append(logits.cpu())
 
         y_pred = torch.cat(all_preds).numpy()
         y_true = torch.cat(all_labels).numpy()
         y_score = torch.cat(all_probs).numpy()
-        X_feat = torch.cat(all_features).numpy()
-
-        # loss = F.cross_entropy(torch.cat(all_logits), torch.cat(all_labels)).item()
+        X_feat = torch.cat(all_features).numpy() if self.use_grl else None
 
         os.makedirs("figures", exist_ok=True)
         roc_path = f"figures/roc_{site_name}.png"
@@ -260,8 +315,10 @@ class LOSOTrainer:
         umap_path = f"figures/umap_{site_name}.png"
 
         auc = plot_roc(y_true, y_score, title=f"ROC - {site_name}", save_path=roc_path)
-        plot_embeddings(X_feat, y_true, method='tsne', title=site_name, save_path=tsne_path)
-        plot_embeddings(X_feat, y_true, method='umap', title=site_name, save_path=umap_path)
+
+        if self.use_grl:
+            plot_embeddings(X_feat, y_true, method='tsne', title=site_name, save_path=tsne_path)
+            plot_embeddings(X_feat, y_true, method='umap', title=site_name, save_path=umap_path)
 
         tn, fp, fn, tp = confusion_matrix(y_true, y_pred).ravel()
         sensitivity = tp / (tp + fn + 1e-6)

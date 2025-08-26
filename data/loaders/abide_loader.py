@@ -21,10 +21,10 @@ def get_abide_dataloaders(config) -> (Dict[str, List[Data]], List[str]):
     conn_type = config.dataset.connectivity.lower() 
     threshold_percentile = config.dataset.edge_threshold
     dynamic = config.dataset.dynamic
-
+    print(f"[INFO] Loading ABIDE data from: {time_series_root}")
     site_data = {}
     site_names = sorted(pheno["SITE_ID"].dropna().unique())
-
+    print(f"[INFO] Found {len(site_names)} sites: {site_names}")
     # -------------------------------------
     # STEP 1: Scan all time series for T_min
     # -------------------------------------
@@ -34,6 +34,7 @@ def get_abide_dataloaders(config) -> (Dict[str, List[Data]], List[str]):
         for _, row in sub_df.iterrows():
             sub_id = str(int(row["SUB_ID"]))
             subject_folder = os.path.join(time_series_root, sub_id)
+            print(f"[DEBUG] Checking subject folder: {subject_folder}")
             if not os.path.exists(subject_folder): continue
 
             ts_files = [f for f in os.listdir(subject_folder) if f.endswith(".1D")]
@@ -68,6 +69,7 @@ def get_abide_dataloaders(config) -> (Dict[str, List[Data]], List[str]):
             sub_id = str(int(row["SUB_ID"]))
 
             subject_folder = os.path.join(time_series_root, sub_id)
+            print(f"[DEBUG] Processing subject folder: {subject_folder}")
             if not os.path.exists(subject_folder):
                 continue
 

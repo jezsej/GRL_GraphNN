@@ -3,14 +3,17 @@ batch_size: 16
 test_batch_size: 16
 val_batch_size: 16
 # train_set: 0.7
-val_split: 0.1
-root: /Users/jessessempijja/Documents/Adulting/Education/MSc/Dissertation/Domain Adaptation/data/abide/ABIDE_pcp/cpac/filt_noglobal
+val_split: 0.2
+# root: /Users/jessessempijja/Documents/Adulting/Education/MSc/Dissertation/Domain Adaptation/data/abide/ABIDE_pcp/cpac/filt_noglobal
+root: /app/data/abide/ABIDE_pcp/cpac/filt_noglobal
 stratified: True
 drop_last: True
 atlas: CC200
 connectivity: correlation
 use_h5: false
-phenotypic_file: /Users/jessessempijja/Documents/Adulting/Education/MSc/Dissertation/Domain Adaptation/data/abide/ABIDE_pcp/Phenotypic_V1_0b_preprocessed1.csv
+# phenotypic_file: /Users/jessessempijja/Documents/Adulting/Education/MSc/Dissertation/Domain Adaptation/data/abide/ABIDE_pcp/Phenotypic_V1_0b_preprocessed1.csv
+# phenotypic_file: /Users/jessessempijja/Documents/Adulting/Education/MSc/Dissertation/DSAM/DSAM/dataset/abide/raw/Phenotypic_V1_0b_preprocessed1.csv
+phenotypic_file: /app/data/abide/ABIDE_pcp/Phenotypic_V1_0b_preprocessed1.csv
 edge_threshold: 75
 include_ados: true
 use_1d: true

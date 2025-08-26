@@ -1,9 +1,14 @@
-export WANDB_MODE=online  # or 'offline' for debugging
+#!/bin/bash
+
+export WANDB_MODE=online  # or 'offline'
+
+DATA_DIR="/app/data"
+LOG_DIR="/app/logs"
+
+mkdir -p "$LOG_DIR"
 
 echo "[INFO] Starting training..."
-python src/main.py \
-    training=loso.yaml \
-    +dataset.root=/mnt/data/abide \
-    +log_path=/mnt/logs/abide \
-    +wandb.project=abide-loso \
-    wandb.mode=$WANDB_MODE
+python /app/run_loso.py \
+    log_path=$LOG_DIR \
+    ++wandb.project=da-loso \
+    ++wandb.mode=$WANDB_MODE
