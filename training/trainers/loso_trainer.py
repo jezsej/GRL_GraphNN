@@ -4,6 +4,7 @@ import torch.nn.functional as F
 import numpy as np
 import pandas as pd
 from torch_geometric.loader import DataLoader
+from torch_geometric.nn import global_mean_pool
 from sklearn.metrics import (
     accuracy_score, roc_auc_score, confusion_matrix,
     f1_score, balanced_accuracy_score
@@ -16,6 +17,7 @@ from evaluation.visualisation.tsne_umap import plot_embeddings
 from tqdm import tqdm
 import wandb
 import copy
+
 
 class LOSOTrainer:
     def __init__(self, model, optimizer, device, config, site_names):
@@ -31,7 +33,7 @@ class LOSOTrainer:
 
         if self.use_grl:
             self.domain_discriminator = DomainDiscriminator(
-                input_dim=config.models.hidden_dim,
+                input_dim=config.models.feature_dim,
                 hidden_dim=64,
                 num_domains=len(site_names)
             ).to(device)
@@ -81,11 +83,19 @@ class LOSOTrainer:
 
     def train_loso(self, site_data):
         print(f"Training on site: {site_data}...")
+
+        #scale threads to match SLURM allocation
+        num_threads = int(os.environ.get("SLURM_CPUS_PER_TASK", os.cpu_count()))
+        torch.set_num_threads(num_threads)
+        os.environ["OMP_NUM_THREADS"] = str(num_threads)
+        print(f"[INFO] Using {num_threads} CPU threads for training")
+
         results = {}
         all_y_true = []
         all_y_score = []
         metrics_summary = []
         run = None
+
         for held_out_site in self.site_names:
             print(f"\n[LOSO] Held-out site: {held_out_site}")
             run = wandb.init(
@@ -99,18 +109,29 @@ class LOSOTrainer:
             train_graphs, val_graphs, test_graphs = [], [], site_data[held_out_site]
             domain_labels = []
 
-            for i, site in enumerate(self.site_names):
+            domain_counter = 0
+            for site in self.site_names:
                 if site == held_out_site:
                     continue
                 site_graphs = site_data[site]
+
+                for g in site_graphs:
+                    g.domain = torch.tensor([domain_counter], dtype=torch.long)
+
                 train_split, val_split = self.stratified_split(site_graphs, self.config.dataset.val_split)
                 train_graphs.extend(train_split)
                 val_graphs.extend(val_split)
-                domain_labels.extend([i] * len(train_split))
+                domain_labels.extend([domain_counter] * len(train_split))
 
-            train_loader = DataLoader(train_graphs, batch_size=self.config.dataset.batch_size, shuffle=True)
-            val_loader = DataLoader(val_graphs, batch_size=self.config.dataset.batch_size, shuffle=False)
-            test_loader = DataLoader(test_graphs, batch_size=self.config.dataset.batch_size, shuffle=False)
+                domain_counter += 1
+
+            # multiple workers for data loading to improve CPU throughput
+            print(f"[DEBUG] Domain labels in training graphs: {set([g.domain.item() for g in train_graphs])}")
+            num_workers = min(8, num_threads)
+            train_loader = DataLoader(train_graphs, batch_size=self.config.dataset.batch_size, shuffle=True, num_workers=num_workers)
+            val_loader = DataLoader(val_graphs, batch_size=self.config.dataset.batch_size, shuffle=False, num_workers=num_workers)
+            test_loader = DataLoader(test_graphs, batch_size=self.config.dataset.batch_size, shuffle=False, num_workers=num_workers)
+
             domain_labels = torch.tensor(domain_labels).to(self.device)
 
             asd_train, td_train = self.log_distribution(f"Train (excluding {held_out_site})", train_graphs)
@@ -181,8 +202,8 @@ class LOSOTrainer:
                 f"{held_out_site}/test_bal_acc": bal_acc,
             })
 
-            
             print(f"[LOSO] Site {held_out_site} - Test Acc: {acc:.4f}, AUC: {auc:.4f}, Sensitivity: {sensitivity:.4f}, Specificity: {specificity:.4f}, F1: {f1:.4f}, Bal. Acc: {bal_acc:.4f}")
+
         os.makedirs("figures", exist_ok=True)
         macro_roc_path = "figures/macro_roc.png"
         plot_macro_micro_roc(all_y_true, all_y_score, save_path=macro_roc_path)
@@ -243,8 +264,13 @@ class LOSOTrainer:
                     )
                 else:
                     features = self.model.extract_features(batch)
-                domain_preds = self.domain_discriminator(features, alpha=self.grl_lambda)
-                loss_domain = self.domain_loss_fn(domain_preds, domain_labels[batch.ptr[:-1]])
+                print("Extracted features shape:", features.shape)
+
+                graph_features = global_mean_pool(features, batch.batch)
+                domain_preds = self.domain_discriminator(graph_features, alpha=self.grl_lambda)
+                domain_targets = batch.domain.view(-1).to(self.device)  # shape [B] # get domain labels from graphs in the batch
+                print(f"[DEBUG] Domain preds shape: {domain_preds.shape}, Domain targets shape: {domain_targets.shape}")
+                loss_domain = self.domain_loss_fn(domain_preds, domain_targets)
                 loss = loss_cls + loss_domain
             else:
                 loss = loss_cls
@@ -329,6 +355,9 @@ class LOSOTrainer:
         y_score = torch.cat(all_probs).numpy()
         X_feat = torch.cat(all_features).numpy() if self.use_grl else None
 
+        print(f"[DEBUG] X_feat shape: {X_feat.shape}")
+        print(f"[DEBUG] y_true shape: {y_true.shape}")
+
         os.makedirs("figures", exist_ok=True)
         roc_path = f"figures/roc_{site_name}.png"
         tsne_path = f"figures/tsne_{site_name}.png"
@@ -337,6 +366,12 @@ class LOSOTrainer:
         auc = plot_roc(y_true, y_score, title=f"ROC - {site_name}", save_path=roc_path)
 
         if self.use_grl:
+            num_graphs = y_true.shape[0]
+            nodes_per_graph = X_feat.shape[0] // num_graphs
+
+            X_feat = X_feat.reshape(num_graphs, nodes_per_graph, -1).mean(axis=1)
+            print(f"[DEBUG] Averaged node features to graph features: {X_feat.shape}")
+            
             plot_embeddings(X_feat, y_true, method='tsne', title=site_name, save_path=tsne_path)
             plot_embeddings(X_feat, y_true, method='umap', title=site_name, save_path=umap_path)
 
@@ -349,3 +384,110 @@ class LOSOTrainer:
         if return_scores:
             return accuracy_score(y_true, y_pred), auc, y_true, y_score, sensitivity, specificity, f1, bal_acc
         return accuracy_score(y_true, y_pred)
+
+    def train_loso_one_site(self, site_data, held_out_site):
+        print(f"\n[LOSO] Held-out site: {held_out_site}")
+        run = wandb.init(
+            project=self.config.logging.project,
+            entity=self.config.logging.entity,
+            name=self.config.logging.run_name + "-site-" + held_out_site,
+            config=OmegaConf.to_container(self.config, resolve=True),
+            reinit=True
+        )
+
+        #scale threads to match SLURM allocation
+        num_threads = int(os.environ.get("SLURM_CPUS_PER_TASK", os.cpu_count()))
+        torch.set_num_threads(num_threads)
+        os.environ["OMP_NUM_THREADS"] = str(num_threads)
+        print(f"[INFO] Using {num_threads} CPU threads for training")
+
+        train_graphs, val_graphs, test_graphs = [], [], site_data[held_out_site]
+        domain_labels = []
+
+        for i, site in enumerate(self.site_names):
+            if site == held_out_site:
+                continue
+            site_graphs = site_data[site]
+            train_split, val_split = self.stratified_split(site_graphs, self.config.dataset.val_split)
+            train_graphs.extend(train_split)
+            val_graphs.extend(val_split)
+            domain_labels.extend([i] * len(train_split))
+
+        num_workers = min(8, num_threads)
+        train_loader = DataLoader(train_graphs, batch_size=self.config.dataset.batch_size, shuffle=True, num_workers=num_workers)
+        val_loader = DataLoader(val_graphs, batch_size=self.config.dataset.batch_size, shuffle=False, num_workers=num_workers)
+        test_loader = DataLoader(test_graphs, batch_size=self.config.dataset.batch_size, shuffle=False, num_workers=num_workers)
+
+        domain_labels = torch.tensor(domain_labels).to(self.device)
+
+        asd_train, td_train = self.log_distribution(f"Train (excluding {held_out_site})", train_graphs)
+        asd_val, td_val = self.log_distribution(f"Val (excluding {held_out_site})", val_graphs)
+        asd_test, td_test = self.log_distribution(f"Test ({held_out_site})", test_graphs)
+        wandb.log({
+            f"{held_out_site}/train_asd": asd_train,
+            f"{held_out_site}/train_td": td_train,
+            f"{held_out_site}/val_asd": asd_val,
+            f"{held_out_site}/val_td": td_val,
+            f"{held_out_site}/test_asd": asd_test,
+            f"{held_out_site}/test_td": td_test
+        })
+
+        best_auc = 0
+        patience = self.config.models.patience
+        min_delta = self.config.models.min_delta
+        stop_counter = 0
+        best_model = None
+
+        for epoch in tqdm(range(self.config.training.epochs), desc=f"[Training] {held_out_site}"):
+            train_loss = self.train_epoch(train_loader, domain_labels)
+            val_auc, val_loss, val_acc = self.validate(val_loader)
+
+            wandb.log({
+                f"{held_out_site}/val_auc": val_auc,
+                f"{held_out_site}/val_loss": val_loss,
+                f"{held_out_site}/val_acc": val_acc,
+                f"{held_out_site}/train_loss": train_loss,
+                "epoch": epoch
+            })
+
+            if val_auc > best_auc + min_delta:
+                best_auc = val_auc
+                best_model = copy.deepcopy(self.model.state_dict())
+                stop_counter = 0
+            else:
+                stop_counter += 1
+                if stop_counter >= patience:
+                    print(f"[Early Stopping] Epoch {epoch} for site {held_out_site}")
+                    break
+
+            print(f"Epoch {epoch}: | Train Loss: {train_loss:.4f} | Val Loss: {val_loss:.4f} | Val AUC: {val_auc:.4f} | Val Acc: {val_acc:.4f} | Best Val AUC: {best_auc:.4f} | Patience: {stop_counter}/{patience} | LR: {self.optimizer.param_groups[0]['lr']:.6f} | GRL Lambda: {self.grl_lambda if self.use_grl else 'N/A'}")
+
+        if best_model is not None:
+            torch.save(best_model, os.path.join(self.best_model_path, f"best_model_{held_out_site}.pt"))
+            self.model.load_state_dict(best_model)
+
+        acc, auc, y_true, y_score, sensitivity, specificity, f1, bal_acc = self.evaluate(test_loader, held_out_site, return_scores=True)
+
+        wandb.log({
+            f"{held_out_site}/test_acc": acc,
+            f"{held_out_site}/test_auc": auc,
+            f"{held_out_site}/test_sens": sensitivity,
+            f"{held_out_site}/test_spec": specificity,
+            f"{held_out_site}/test_f1": f1,
+            f"{held_out_site}/test_bal_acc": bal_acc,
+        })
+
+        print(f"[LOSO] Site {held_out_site} - Test Acc: {acc:.4f}, AUC: {auc:.4f}, Sensitivity: {sensitivity:.4f}, Specificity: {specificity:.4f}, F1: {f1:.4f}, Bal. Acc: {bal_acc:.4f}")
+
+        run.finish()
+        return {
+            "site": held_out_site,
+            "accuracy": acc,
+            "auc": auc,
+            "sensitivity": sensitivity,
+            "specificity": specificity,
+            "f1_score": f1,
+            "balanced_accuracy": bal_acc,
+            "y_true": y_true,
+            "y_score": y_score
+        }
