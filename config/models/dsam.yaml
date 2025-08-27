@@ -80,3 +80,4 @@ bgnnratio: 0.85   #0.0 is lower
 attentionthreshold: 10
 num_classes: 2
 hidden_dim: 512
+feature_dim: 200

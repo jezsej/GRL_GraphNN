@@ -48,13 +48,17 @@ COPY utils/ /app/utils/
 COPY result/ /app/result/
 COPY figures/ /app/figures/
 COPY run_loso.py /app/run_loso.py
+# COPY run_loso_one_site.py /app/run_loso_one_site.py
 COPY run.sh /app/run.sh
+# COPY run_parallel.sh /app/run_parallel.sh
+# COPY run_loso_one_site.py /app/run_loso_one_site.py
 COPY check_imports.py /app/check_imports.py
 
 # ----------------------
 # 6. Make Entry Script Executable
 # ----------------------
 RUN chmod +x /app/run.sh
+# RUN chmod +x /app/run_parallel.sh
 
 # ----------------------
 # 7. Set PYTHONPATH
@@ -65,3 +69,4 @@ ENV PYTHONPATH="/app:$PYTHONPATH"
 # 8. Entry Command
 # ----------------------
 CMD ["/app/run.sh"]
+# CMD ["/app/run_parallel.sh"]
