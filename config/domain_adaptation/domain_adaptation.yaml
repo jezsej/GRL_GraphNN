@@ -1,9 +1,9 @@
-use_grl: false
+use_grl: true
 grl_lambda: 1.0
 domain_loss_weight: 1.0
 hidden_dim: 128
 grl_schedule: dann       # "cosine" | "linear" | "dann"
 grl_gamma: 10.0
-grl_max_lambda: 1.0 
-grl_warmup_epochs: 3
-grl_ramp_epochs: 10
+grl_max_lambda: 1.0 # when grl_schedule is "dann"
+grl_warmup_epochs: 0
+grl_ramp_epochs: 0

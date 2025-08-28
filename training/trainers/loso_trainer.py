@@ -75,6 +75,10 @@ class LOSOTrainer:
             
             batch.pseudo = pseudo
             return self.model(batch.x, batch.edge_index, batch.batch, batch.edge_attr, batch.pseudo)
+        elif self.config.models.name == "BrainNetworkTransformer":
+            time_series = batch.time_series
+            node_feature = batch.x.view(batch.num_graphs, self.config.dataset.num_nodes, -1)
+            return self.model(time_series, node_feature)
         else:
             return self.model(batch)
         
@@ -101,6 +105,10 @@ class LOSOTrainer:
             batch.pseudo = pseudo
             print(f"[DEBUG] batch.pseudo shape: {batch.pseudo.shape}")
             return self.model.extract_features(batch)
+        elif self.config.models.name == "BrainNetworkTransformer":
+            node_feature = batch.x.view(batch.num_graphs, self.config.dataset.num_nodes, -1)
+            time_series = batch.time_series
+            return self.model.extract_features(time_series, node_feature)
         else:
             raise NotImplementedError("Feature extraction not implemented for this model.")
     
@@ -182,7 +190,7 @@ class LOSOTrainer:
                 total_steps = self.config.training.epochs * len(train_loader)
                 warm_up_steps = self.config.domain_adaptation.grl_warmup_epochs * len(train_loader)
                 ramp_steps = self.config.domain_adaptation.grl_ramp_epochs * len(train_loader)
-
+                
                 self.grl_scheduler = GRLScheduler(
                     total_steps=total_steps,
                     schedule=self.config.domain_adaptation.grl_schedule,
@@ -191,6 +199,7 @@ class LOSOTrainer:
                     ramp_steps=ramp_steps,
                     max_lambda=self.config.domain_adaptation.grl_max_lambda
                 )
+                print(f"[INFO] GRL Scheduler: {self.grl_scheduler.schedule} with max lambda {self.grl_scheduler.max_lambda}, total steps {total_steps}, warmup {warm_up_steps}, ramp {ramp_steps}")
 
             asd_train, td_train = self.log_distribution(f"Train (excluding {held_out_site})", train_graphs)
             asd_val, td_val = self.log_distribution(f"Val (excluding {held_out_site})", val_graphs)
@@ -268,7 +277,7 @@ class LOSOTrainer:
 
         os.makedirs("result/stats", exist_ok=True)
         df = pd.DataFrame(metrics_summary)
-        df.to_csv("result/stats/metrics_summary.csv", index=False)
+        df.to_csv(f"result/stats/{self.mode}_metrics_summary.csv", index=False)
         print("\n[LOSO] All-site Results:")
         print(df.to_string(index=False))
 
@@ -312,6 +321,10 @@ class LOSOTrainer:
                     # convert node features to graph features by averaging over nodes
                     features = global_mean_pool(features, batch.batch)
                 self.grl_lambda = self.grl_scheduler.get_lambda(self.global_step)
+
+                print(f"[DEBUG] GRL Lambda at step {self.global_step}: {self.grl_lambda} of {self.grl_scheduler.total_steps}")
+
+                print(f"[DEBUG] features input to fc: {features.shape}")
                 domain_preds = self.domain_discriminator(features, alpha=self.grl_lambda)
                 domain_targets = batch.domain.view(-1).to(self.device)  # shape [B] # get domain labels from graphs in the batch
                 print(f"[DEBUG] Domain preds shape: {domain_preds.shape}, Domain targets shape: {domain_targets.shape}")
@@ -495,16 +508,7 @@ class LOSOTrainer:
         if domain_metric_rows:
             domain_df = pd.DataFrame(domain_metric_rows)
             
-            # 1. Print table
-            # print("\n[Per-Domain Evaluation Metrics]")
-            # print(domain_df.to_string(index=False))
-
-            # 2. Save to per-site CSV
-            # os.makedirs("result/stats/per_domain", exist_ok=True)
-            # site_csv_path = f"result/stats/per_domain/{site_name}_per_domain_metrics.csv"
-            # domain_df.to_csv(site_csv_path, index=False)
-
-            # 3. Append to global summary CSV
+            # Append to global summary CSV
             global_csv_path = f"result/stats/{self.mode}_per_domain_summary.csv"
             if os.path.exists(global_csv_path):
                 existing_df = pd.read_csv(global_csv_path)

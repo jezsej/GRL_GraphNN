@@ -1,7 +1,7 @@
 defaults:
   - _self_
   - dataset: abide
-  - models: bnt # bnt, dsam, braingnn
+  - models: braingnn # bnt, dsam, braingnn
   - optimizer: adam
   - training: training_configs
   - datasz: 100p

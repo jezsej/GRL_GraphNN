@@ -1,3 +1,8 @@
+"""
+Base class for models.
+https://github.com/Wayfear/BrainNetworkTransformer
+"""
+
 from abc import abstractmethod
 import torch
 import torch.nn as nn
