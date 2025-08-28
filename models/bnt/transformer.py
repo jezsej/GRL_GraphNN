@@ -60,6 +60,35 @@ class GraphTransformer(BaseModel):
             node_feature = self.norm(node_feature)
 
         return self.fc(node_feature)
+    
+    def forward(self, time_series, node_feature, return_features=False):
+        bz, _, _ = node_feature.shape
+
+        for atten in self.attention_list:
+            node_feature = atten(node_feature)
+
+        if self.readout == "concat":
+            node_feature = self.dim_reduction(node_feature)
+            node_feature = node_feature.reshape((bz, -1))
+
+        elif self.readout == "mean":
+            node_feature = torch.mean(node_feature, dim=1)
+
+        elif self.readout == "max":
+            node_feature, _ = torch.max(node_feature, dim=1)
+
+        elif self.readout == "sum":
+            node_feature = torch.sum(node_feature, dim=1)
+            node_feature = self.norm(node_feature)
+
+        if return_features:
+            return node_feature
+
+        return self.fc(node_feature)
+
+    
+    def extract_features(self, time_series, node_feature):
+        return self.forward(time_series, node_feature, return_features=True)
 
     def get_attention_weights(self):
         return [atten.get_attention_weights() for atten in self.attention_list]

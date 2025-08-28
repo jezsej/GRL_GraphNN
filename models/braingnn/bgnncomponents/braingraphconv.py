@@ -1,12 +1,12 @@
 import torch
 import torch.nn.functional as F
 from torch.nn import Parameter
-from net.brainmsgpassing import MyMessagePassing
+from .brainmsgpassing import MyMessagePassing
 from torch_geometric.utils import add_remaining_self_loops,softmax
 
 from torch_geometric.typing import (OptTensor)
 
-from net.inits import uniform
+from .inits import uniform
 
 
 class MyNNConv(MyMessagePassing):
@@ -37,8 +37,16 @@ class MyNNConv(MyMessagePassing):
         if size is None and torch.is_tensor(x):
             edge_index, edge_weight = add_remaining_self_loops(
                 edge_index, edge_weight, 1, x.size(0))
-
+        print("DEBUG braingraphconv forward: x.shape", x.shape, "edge_index.shape", edge_index.shape, "edge_weight.shape", edge_weight.shape if edge_weight is not None else None, "pseudo.shape", pseudo.shape if pseudo is not None else None)
+        print(f"[DEBUG] in_channels: {self.in_channels}, out_channels: {self.out_channels}")
+        
+        # assert pseudo.size(0) == x.size(0), f"Mismatch: pseudo={pseudo.size(0)}, x={x.size(0)}"
+        
         weight = self.nn(pseudo).view(-1, self.in_channels, self.out_channels)
+ 
+        assert weight.shape == (x.shape[0], self.in_channels, self.out_channels), f"Expected weight shape [N, {self.in_channels}, {self.out_channels}], got {weight.shape}"
+        
+        
         if torch.is_tensor(x):
             x = torch.matmul(x.unsqueeze(1), weight).squeeze(1)
         else:
