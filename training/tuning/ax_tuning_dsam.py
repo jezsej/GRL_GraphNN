@@ -2,7 +2,7 @@ import os
 import torch
 from ax.service.managed_loop import optimize
 from omegaconf import OmegaConf
-import run_loso  # your main entry point
+import run_loso 
 
 
 BASE_CONFIG_PATH = "configs/training/loso.yaml"

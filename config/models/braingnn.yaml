@@ -1,0 +1,30 @@
+name: BrainGNN
+alias: BrainGNN
+indim: 200           # feature dim
+nroi: 200            # number of ROIs (nodes)
+nclass: 2            # binary classification
+layer: 2             # number of GNN layers
+pooling_ratio: 0.5   # pooling ratio
+patience: 35
+min_delta: 0.001
+
+epochs: 100
+batch_size: 100
+learning_rate: 0.01
+weight_decay: 0.005
+optimizer: Adam
+step_size: 20
+gamma: 0.5
+
+
+lamb0: 1.0   # classification loss weight
+lamb1: 0.0   # s1 unit regularization
+lamb2: 0.0   # s2 unit regularization
+lamb3: 0.1   # s1 entropy regularization
+lamb4: 0.1   # s2 entropy regularization
+lamb5: 0.1   # s1 consistency regularization
+
+fold: 0
+save_model: true
+load_model: false
+feature_dim: 512
