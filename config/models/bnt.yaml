@@ -8,5 +8,5 @@ freeze_center: true
 project_assignment: true
 pos_embed_dim: 360
 feature_dim: 800
-patience: 35
+patience: 40
 min_delta: 0.001
