@@ -18,21 +18,28 @@ def grad_reverse(x, alpha):
     return GradientReversalLayer.apply(x, alpha)
 
 
+
 class DomainDiscriminator(nn.Module):
-    def __init__(self, input_dim, hidden_dim, num_domains):
+    def __init__(self, input_dim, hidden_dim, num_domains, dropout=0.5, use_bn=True):
         super().__init__()
-        self.net = nn.Sequential(
-            nn.Linear(input_dim, hidden_dim),
-            nn.ReLU(),
-            nn.Linear(hidden_dim, hidden_dim),
-            nn.ReLU(),
+
+        def block(in_features, out_features):
+            layers = [nn.Linear(in_features, out_features)]
+            if use_bn:
+                layers.append(nn.BatchNorm1d(out_features))
+            layers.append(nn.ReLU(inplace=True))
+            layers.append(nn.Dropout(p=dropout))
+            return nn.Sequential(*layers)
+
+        self.classifier = nn.Sequential(
+            block(input_dim, hidden_dim),
+            block(hidden_dim, hidden_dim),
             nn.Linear(hidden_dim, num_domains)
         )
 
     def forward(self, x, alpha=1.0):
         x = grad_reverse(x, alpha)
-        return self.net(x)
-
+        return self.classifier(x)
 
 class AdversarialLoss(nn.Module):
     def __init__(self, loss_type='cross_entropy', weight=1.0):
