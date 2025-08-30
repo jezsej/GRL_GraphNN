@@ -1,12 +1,12 @@
-import os
 import torch
 import hydra
 import wandb
+import os
 from omegaconf import DictConfig, OmegaConf
 from data.loaders.abide_loader import get_abide_dataloaders
 from models.model_factory import model_factory
 from training.trainers.loso_trainer import LOSOTrainer
-from utils.logging_utils import setup_wandb
+
 
 
 @hydra.main(version_base=None, config_path="config", config_name="config")
@@ -14,7 +14,10 @@ def main(cfg: DictConfig):
     # Initialise WandB
     # wandb.login(anonymous="must", key=os.environ.get("WANDB_API_KEY"), verify=True)
     assert os.environ.get("WANDB_API_KEY") is not None, "WANDB_API_KEY not set in environment!"
-    wandb.init(project=cfg.logging.project, entity=cfg.logging.entity)
+    
+    project_name = cfg.logging.project if cfg.local_host else "domainadaptation"
+    
+    wandb.init(project=project_name, entity=cfg.logging.entity)
     print(OmegaConf.to_yaml(cfg))
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 

@@ -17,3 +17,9 @@ def log_metrics_to_wandb(metrics, step=None, prefix=""):
         return
 
     wandb.log({f"{prefix}{k}": v for k, v in metrics.items()}, step=step)
+
+def wandb_log(data):
+    try:
+        wandb.log(data)
+    except (BrokenPipeError, Exception) as e:
+        print(f"[W&B WARNING] Logging failed: {e}")

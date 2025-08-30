@@ -12,12 +12,13 @@ from sklearn.metrics import (
 from omegaconf import DictConfig, OmegaConf
 from sklearn.model_selection import StratifiedShuffleSplit
 from models.domain_adaptation.components import DomainDiscriminator, AdversarialLoss
-from evaluation.visualisation.roc_plot import plot_roc, plot_macro_micro_roc
-from evaluation.visualisation.tsne_umap import plot_embeddings
+# from evaluation.visualisation.roc_plot import plot_roc, plot_macro_micro_roc
+# from evaluation.visualisation.tsne_umap import plot_embeddings
 from tqdm import tqdm
 import wandb
 import copy
 from models.domain_adaptation.components import GRLScheduler
+from utils.logging_utils import wandb_log
 
 
 class LOSOTrainer:
@@ -77,7 +78,17 @@ class LOSOTrainer:
             return self.model(batch.x, batch.edge_index, batch.batch, batch.edge_attr, batch.pseudo)
         elif self.config.models.name == "BrainNetworkTransformer":
             time_series = batch.time_series
-            node_feature = batch.x.view(batch.num_graphs, self.config.dataset.num_nodes, -1)
+            node_feature = batch.x
+            
+            assert node_feature is not None, "batch.x is None"
+            assert node_feature.dim() == 2, f"Expected 2D node features (N*F), got {node_feature.shape}"
+            assert node_feature.shape[0] == batch.num_graphs * self.config.dataset.num_nodes, \
+                f"Expected shape[0] = {batch.num_graphs * self.config.dataset.num_nodes}, got {node_feature.shape[0]}"
+
+            node_feature = node_feature.view(batch.num_graphs, self.config.dataset.num_nodes, -1)
+            print(f"[DEBUG] node_feature reshaped: {node_feature.shape}")
+
+
             return self.model(time_series, node_feature)
         else:
             return self.model(batch)
@@ -136,7 +147,7 @@ class LOSOTrainer:
         num_threads = int(os.environ.get("SLURM_CPUS_PER_TASK", os.cpu_count()))
         torch.set_num_threads(num_threads)
         os.environ["OMP_NUM_THREADS"] = str(num_threads)
-        print(f"[INFO] Using {num_threads} CPU threads for training")
+        print(f"[INFO] Using {num_threads // 8} CPU threads for training")
 
         results = {}
         all_y_true = []
@@ -175,7 +186,7 @@ class LOSOTrainer:
 
             # multiple workers for data loading to improve CPU throughput
             print(f"[DEBUG] Domain labels in training graphs: {set([g.domain.item() for g in train_graphs])}")
-            num_workers = min(8, num_threads)
+            num_workers = min(4, num_threads // 8)  # limit to avoid too many threads
             train_loader = DataLoader(train_graphs, batch_size=self.config.dataset.batch_size, shuffle=True, num_workers=num_workers)
             val_loader = DataLoader(val_graphs, batch_size=self.config.dataset.batch_size, shuffle=False, num_workers=num_workers)
             held_out_idx = self.site_names.index(held_out_site)
@@ -204,7 +215,7 @@ class LOSOTrainer:
             asd_train, td_train = self.log_distribution(f"Train (excluding {held_out_site})", train_graphs)
             asd_val, td_val = self.log_distribution(f"Val (excluding {held_out_site})", val_graphs)
             asd_test, td_test = self.log_distribution(f"Test ({held_out_site})", test_graphs)
-            wandb.log({
+            wandb_log({
                 f"{held_out_site}/train_asd": asd_train,
                 f"{held_out_site}/train_td": td_train,
                 f"{held_out_site}/val_asd": asd_val,
@@ -223,7 +234,7 @@ class LOSOTrainer:
                 train_loss = self.train_epoch(train_loader, held_out_site, epoch)
 
                 val_auc, val_loss, val_acc = self.validate(val_loader, held_out_site)
-                wandb.log({
+                wandb_log({
                     f"{held_out_site}/val_auc": val_auc,
                     f"{held_out_site}/val_loss": val_loss,
                     f"{held_out_site}/val_acc": val_acc,
@@ -260,7 +271,7 @@ class LOSOTrainer:
                 "balanced_accuracy": bal_acc
             })
 
-            wandb.log({
+            wandb_log({
                 f"{held_out_site}/test_acc": acc,
                 f"{held_out_site}/test_auc": auc,
                 f"{held_out_site}/test_sens": sensitivity,
@@ -272,8 +283,8 @@ class LOSOTrainer:
             print(f"[LOSO] Site {held_out_site} - Test Acc: {acc:.4f}, AUC: {auc:.4f}, Sensitivity: {sensitivity:.4f}, Specificity: {specificity:.4f}, F1: {f1:.4f}, Bal. Acc: {bal_acc:.4f}")
 
         os.makedirs("figures", exist_ok=True)
-        macro_roc_path = "figures/macro_roc.png"
-        plot_macro_micro_roc(all_y_true, all_y_score, save_path=macro_roc_path)
+        # macro_roc_path = "figures/macro_roc.png"
+        # plot_macro_micro_roc(all_y_true, all_y_score, save_path=macro_roc_path)
 
         os.makedirs("result/stats", exist_ok=True)
         df = pd.DataFrame(metrics_summary)
@@ -283,7 +294,7 @@ class LOSOTrainer:
 
         # Log overall metrics
         mean_metrics = df.mean(numeric_only=True)
-        wandb.log({
+        wandb_log({
             "overall/mean_test_acc": mean_metrics["accuracy"],
             "overall/mean_test_auc": mean_metrics["auc"],
             "overall/mean_test_sens": mean_metrics["sensitivity"],
@@ -344,7 +355,7 @@ class LOSOTrainer:
         
         if self.use_grl:
             domain_acc = correct_domains / total_domains
-            wandb.log({f"{held_out_site}/train_domain_acc": domain_acc,
+            wandb_log({f"{held_out_site}/train_domain_acc": domain_acc,
                        "epoch": epoch})
             print(f"Domain Discriminator Accuracy: {domain_acc:.4f}")
         print(f"Training Loss: {total_loss / len(train_loader):.4f} | LR: {self.optimizer.param_groups[0]['lr']:.6f}")
@@ -421,11 +432,11 @@ class LOSOTrainer:
         print(f"[DEBUG] y_true shape: {y_true.shape}")
 
         os.makedirs("figures", exist_ok=True)
-        roc_path = f"figures/roc_{site_name}.png"
-        tsne_path = f"figures/tsne_{site_name}.png"
-        umap_path = f"figures/umap_{site_name}.png"
+        # roc_path = f"figures/roc_{site_name}.png"
+        # tsne_path = f"figures/tsne_{site_name}.png"
+        # umap_path = f"figures/umap_{site_name}.png"
 
-        auc = plot_roc(y_true, y_score, title=f"ROC - {site_name}", save_path=roc_path)
+        auc = roc_auc_score(y_true, y_score)
 
         if self.use_grl:
             num_graphs = y_true.shape[0]
@@ -434,8 +445,8 @@ class LOSOTrainer:
             X_feat = X_feat.reshape(num_graphs, nodes_per_graph, -1).mean(axis=1)
             print(f"[DEBUG] Averaged node features to graph features: {X_feat.shape}")
 
-            plot_embeddings(X_feat, y_true, method='tsne', title=site_name, save_path=tsne_path)
-            plot_embeddings(X_feat, y_true, method='umap', title=site_name, save_path=umap_path)
+            # plot_embeddings(X_feat, y_true, method='tsne', title=site_name, save_path=tsne_path)
+            # plot_embeddings(X_feat, y_true, method='umap', title=site_name, save_path=umap_path)
 
         tn, fp, fn, tp = confusion_matrix(y_true, y_pred).ravel()
         sensitivity = tp / (tp + fn + 1e-6)
@@ -458,7 +469,7 @@ class LOSOTrainer:
             site_sens = recall_score(y_t, y_p, pos_label=1)
             site_spec = recall_score(y_t, y_p, pos_label=0)
 
-            wandb.log({
+            wandb_log({
                 f"{site_name}/domain_{domain}_auc": site_auc,
                 f"{site_name}/domain_{domain}_acc": site_acc,
                 f"{site_name}/domain_{domain}_f1": site_f1,
@@ -485,7 +496,7 @@ class LOSOTrainer:
             site_sens = recall_score(y_t, y_p, pos_label=1)
             site_spec = recall_score(y_t, y_p, pos_label=0)
 
-            wandb.log({
+            wandb_log({
                 f"{site_name}/domain_{domain}_auc": site_auc,
                 f"{site_name}/domain_{domain}_acc": site_acc,
                 f"{site_name}/domain_{domain}_f1": site_f1,
@@ -561,7 +572,7 @@ class LOSOTrainer:
     #     asd_train, td_train = self.log_distribution(f"Train (excluding {held_out_site})", train_graphs)
     #     asd_val, td_val = self.log_distribution(f"Val (excluding {held_out_site})", val_graphs)
     #     asd_test, td_test = self.log_distribution(f"Test ({held_out_site})", test_graphs)
-    #     wandb.log({
+    #     wandb_log({
     #         f"{held_out_site}/train_asd": asd_train,
     #         f"{held_out_site}/train_td": td_train,
     #         f"{held_out_site}/val_asd": asd_val,
@@ -580,7 +591,7 @@ class LOSOTrainer:
     #         train_loss = self.train_epoch(train_loader, domain_labels)
     #         val_auc, val_loss, val_acc = self.validate(val_loader)
 
-    #         wandb.log({
+    #         wandb_log({
     #             f"{held_out_site}/val_auc": val_auc,
     #             f"{held_out_site}/val_loss": val_loss,
     #             f"{held_out_site}/val_acc": val_acc,
@@ -606,7 +617,7 @@ class LOSOTrainer:
 
     #     acc, auc, y_true, y_score, sensitivity, specificity, f1, bal_acc = self.evaluate(test_loader, held_out_site, return_scores=True)
 
-    #     wandb.log({
+    #     wandb_log({
     #         f"{held_out_site}/test_acc": acc,
     #         f"{held_out_site}/test_auc": auc,
     #         f"{held_out_site}/test_sens": sensitivity,
