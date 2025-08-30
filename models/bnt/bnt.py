@@ -48,6 +48,10 @@ class TransPoolingEncoder(nn.Module):
         return self.pooling
 
     def forward(self, x):
+        if x is None:
+            raise ValueError("Input x to TransPoolingEncoder is None!")
+
+        print(f"[DEBUG] Transformer input shape: {x.shape}")
         x = self.transformer(x)
         if self.pooling:
             x, assignment = self.dec(x)

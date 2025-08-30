@@ -1,19 +1,28 @@
-program: main.py
-method: grid
-name: GNN_Model_GRL_Sweep
+program: run_loso.py
+method: bayes
+metric:
+  name: val_auc
+  goal: maximize
+early_terminate:
+  type: hyperband
+  min_iter: 10
+  max_iter: 50
+  s: 2
 
 parameters:
-  model.name:
-    values: [dsam] # bnt braingnn dsam
+  models.name:
+    values: [SpatioTemporalModel, BrainGNN, BrainNetworkTransformer]
 
   domain_adaptation.use_grl:
-    values: [false, true]
+    values: [true, false]
 
   domain_adaptation.grl_lambda:
-    values: [0.0, 0.5, 1.0]
+    min: 0.0
+    max: 1.0
 
   domain_adaptation.domain_loss_weight:
-    values: [0.0, 0.1, 1.0]
+    min: 0.0
+    max: 1.0
 
   training.lr:
     values: [0.0005, 0.001]
