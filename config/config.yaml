@@ -7,8 +7,9 @@ defaults:
   - datasz: 100p
   - preprocess: non_mixup
   - logging: logging
-  - sweep: sweep
+  # - sweep: sweep
   - domain_adaptation: domain_adaptation
+
 
 repeat_time: 1
 log_path: result
@@ -16,4 +17,4 @@ save_learnable_graph: False
 local_host: false
 # wandb
 wandb_entity: eggroup
-project: "Domain Adaptation"
+project: "Domain Adaptation - Tuned"

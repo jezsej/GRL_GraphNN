@@ -205,5 +205,5 @@ def get_abide_dataloaders(config) -> (Dict[str, List[Data]], List[str]):
     os.makedirs(os.path.dirname(stats_path), exist_ok=True) # Ensure log directory exists
     stats_df.to_csv(stats_path, index=False) # Save site stats to CSV
     print(f"[SAVED] Site statistics saved to: {stats_path}")
-    wandb.log({"abide_site_stats": wandb.Table(dataframe=stats_df)})
+    # wandb.log({"abide_site_stats": wandb.Table(dataframe=stats_df)})
     return valid_site_data, valid_site_names

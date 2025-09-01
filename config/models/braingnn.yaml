@@ -1,5 +1,5 @@
 name: BrainGNN
-alias: BrainGNN
+alias: braingnn
 indim: 200           # feature dim
 nroi: 200            # number of ROIs (nodes)
 nclass: 2            # binary classification
@@ -15,7 +15,7 @@ weight_decay: 0.005
 optimizer: Adam
 step_size: 20
 gamma: 0.5
-
+dropout: 0.0
 
 lamb0: 1.0   # classification loss weight
 lamb1: 0.0   # s1 unit regularization

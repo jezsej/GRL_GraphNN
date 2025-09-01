@@ -12,3 +12,4 @@ saved_models/*
 wandb/*
 checkpoints/*
 figures/*
+core.*

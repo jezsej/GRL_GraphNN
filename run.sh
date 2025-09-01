@@ -8,7 +8,7 @@ JOB_ID=${3:-manual}                # SLURM job ID or fallback to "manual"
 MODEL_NAME=${1:-dsam}              # Default to 'dsam' if not provided
 USE_GRL=${2:-false}                # Default to no GRL
 WANDB_MODE=${4:-offline} # Set offline logging
-
+EXTRA_OVERRIDES=${5:-""}
 # -----------------------------
 # Scratch-space output folders
 # -----------------------------
@@ -47,7 +47,7 @@ echo " - FIGURE_DIR          : $FIGURE_DIR"
 echo " - CUDA_VISIBLE_DEVICES: $CUDA_VISIBLE_DEVICES"
 
 export WANDB_MODE=$WANDB_MODE
-
+echo "[DEBUG] Mounted code from gpu node########"
 # -----------------------------
 # Run LOSO Training
 # -----------------------------
@@ -61,7 +61,8 @@ python /app/run_loso.py \
     ++wandb.name=run-${JOB_ID} \
     ++wandb.mode=$WANDB_MODE \
     ++output.result_dir=$RESULT_DIR \
-    ++output.figure_dir=$FIGURE_DIR
+    ++output.figure_dir=$FIGURE_DIR \
+    $EXTRA_OVERRIDES
 
 # -----------------------------
 # Sync outputs back if offline mode was used

@@ -16,6 +16,8 @@ from omegaconf import DictConfig
 from .base import BaseModel
 
 
+
+
 class TransPoolingEncoder(nn.Module):
     """
     Transformer encoder with Pooling mechanism.
@@ -25,9 +27,15 @@ class TransPoolingEncoder(nn.Module):
 
     def __init__(self, input_feature_size, input_node_num, hidden_size, output_node_num, pooling=True, orthogonal=True, freeze_center=False, project_assignment=True):
         super().__init__()
-        self.transformer = InterpretableTransformerEncoder(d_model=input_feature_size, nhead=4,
-                                                           dim_feedforward=hidden_size,
-                                                           batch_first=True)
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self.transformer = InterpretableTransformerEncoder(
+            d_model=input_feature_size,
+            nhead=4,
+            dim_feedforward=hidden_size,
+            batch_first=True,
+            device=self.device
+        )
+       
 
         self.pooling = pooling
         if pooling:
@@ -50,8 +58,21 @@ class TransPoolingEncoder(nn.Module):
     def forward(self, x):
         if x is None:
             raise ValueError("Input x to TransPoolingEncoder is None!")
+        assert x is not None, "Transformer input x is None during validation!"
+        assert isinstance(x, torch.Tensor), f"Expected tensor, got {type(x)}"
+        assert x.dim() == 3, f"Expected 3D tensor (batch_size, num_nodes, feature_dim), got {x.shape}"
+        assert x.dtype == torch.float32, f"Expected float32, got {x.dtype}"
+        assert x.device == next(self.transformer.parameters()).device, \
+            f"x device {x.device} doesn't match model device {next(self.transformer.parameters()).device}"
 
-        print(f"[DEBUG] Transformer input shape: {x.shape}")
+        print(f"[DEBUG] Transformer input shape: {x.shape} | dtype: {x.dtype} | device: {x.device}")
+
+        # Defensive print for supported device types
+        for name, param in self.transformer.named_parameters():
+            if param is None:
+                print(f"[DEBUG] Transformer param '{name}' is None!")
+            else:
+                print(f"[DEBUG] Transformer param '{name}' device: {param.device}")
         x = self.transformer(x)
         if self.pooling:
             x, assignment = self.dec(x)
@@ -115,8 +136,8 @@ class BrainNetworkTransformer(BaseModel):
     def forward(self,
                 time_seires: torch.tensor,
                 node_feature: torch.tensor):
-
-        bz, _, _, = node_feature.shape
+        print(f"[DEBUG] BNT forward called with time_series shape: {time_seires.shape}, node_feature shape: {node_feature.shape}")
+        bz, _, _, = node_feature.shape # (batch_size, num_nodes, feature_dim)
 
         if self.pos_encoding == 'identity':
             pos_emb = self.node_identity.expand(bz, *self.node_identity.shape)
@@ -125,6 +146,7 @@ class BrainNetworkTransformer(BaseModel):
         assignments = []
 
         for atten in self.attention_list:
+            print(f"[DEBUG] Input to TransPoolingEncoder: {node_feature.shape}")
             node_feature, assignment = atten(node_feature)
             assignments.append(assignment)
 
