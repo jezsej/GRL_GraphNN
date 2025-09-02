@@ -141,7 +141,7 @@ class LOSOTrainer:
         print(f"[{name}] Total: {total}, ASD: {asd}, TD: {td}")
         return asd, td
     
-    def debug_overlap(train, test):
+    def debug_overlap(self, train, test):
         train_ids = {id(g) for g in train}
         test_ids = {id(g) for g in test}
         overlap = train_ids & test_ids
@@ -170,9 +170,11 @@ class LOSOTrainer:
         num_threads = int(os.environ.get("SLURM_CPUS_PER_TASK", os.cpu_count()))
         torch.set_num_threads(num_threads)
         os.environ["OMP_NUM_THREADS"] = str(num_threads)
+        
         num_threads = 1 if self.device.type == 'cuda' else num_threads  # limit to 1 if using GPU
 
         print(f"[INFO] Using {num_threads // 8} CPU threads for training")
+
 
         results = {}
         all_y_true = []
@@ -213,9 +215,9 @@ class LOSOTrainer:
             # multiple workers for data loading to improve CPU throughput
             print(f"[DEBUG] Domain labels in training graphs: {set([g.domain.item() for g in train_graphs])}")
             
-            debug_overlap(train_graphs, test_graphs)
-            debug_overlap(val_graphs, test_graphs)
-            num_workers = min(1, num_threads // 8)  # limit to avoid too many threads
+            self.debug_overlap(train_graphs, test_graphs)
+            self.debug_overlap(val_graphs, test_graphs)
+            num_workers = min(4, num_threads // 8) 
             train_loader = DataLoader(train_graphs, batch_size=self.config.dataset.batch_size, shuffle=True, num_workers=num_workers)
             val_loader = DataLoader(val_graphs, batch_size=self.config.dataset.batch_size, shuffle=False, num_workers=num_workers)
             held_out_idx = self.site_names.index(held_out_site)
@@ -386,7 +388,7 @@ class LOSOTrainer:
 
                 print(f"[DEBUG] GRL Lambda at step {self.global_step}: {self.grl_lambda} of {self.grl_scheduler.total_steps}")
 
-                print(f"[DEBUG] features input to fc: {features.shape}")
+                # print(f"[DEBUG] features input to fc: {features.shape}")
                 domain_preds = self.domain_discriminator(features, alpha=self.grl_lambda)
                 domain_targets = batch.domain.view(-1).to(self.device)  # shape [B] # get domain labels from graphs in the batch
                 print(f"[DEBUG] Domain preds shape: {domain_preds.shape}, Domain targets shape: {domain_targets.shape}")
