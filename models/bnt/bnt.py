@@ -56,23 +56,6 @@ class TransPoolingEncoder(nn.Module):
         return self.pooling
 
     def forward(self, x):
-        if x is None:
-            raise ValueError("Input x to TransPoolingEncoder is None!")
-        assert x is not None, "Transformer input x is None during validation!"
-        assert isinstance(x, torch.Tensor), f"Expected tensor, got {type(x)}"
-        assert x.dim() == 3, f"Expected 3D tensor (batch_size, num_nodes, feature_dim), got {x.shape}"
-        assert x.dtype == torch.float32, f"Expected float32, got {x.dtype}"
-        assert x.device == next(self.transformer.parameters()).device, \
-            f"x device {x.device} doesn't match model device {next(self.transformer.parameters()).device}"
-
-        print(f"[DEBUG] Transformer input shape: {x.shape} | dtype: {x.dtype} | device: {x.device}")
-
-        # Defensive print for supported device types
-        for name, param in self.transformer.named_parameters():
-            if param is None:
-                print(f"[DEBUG] Transformer param '{name}' is None!")
-            else:
-                print(f"[DEBUG] Transformer param '{name}' device: {param.device}")
         x = self.transformer(x)
         if self.pooling:
             x, assignment = self.dec(x)
@@ -136,7 +119,7 @@ class BrainNetworkTransformer(BaseModel):
     def forward(self,
                 time_seires: torch.tensor,
                 node_feature: torch.tensor):
-        print(f"[DEBUG] BNT forward called with time_series shape: {time_seires.shape}, node_feature shape: {node_feature.shape}")
+        # print(f"[DEBUG] BNT forward called with time_series shape: {time_seires.shape}, node_feature shape: {node_feature.shape}")
         bz, _, _, = node_feature.shape # (batch_size, num_nodes, feature_dim)
 
         if self.pos_encoding == 'identity':
@@ -146,14 +129,14 @@ class BrainNetworkTransformer(BaseModel):
         assignments = []
 
         for atten in self.attention_list:
-            print(f"[DEBUG] Input to TransPoolingEncoder: {node_feature.shape}")
+            # print(f"[DEBUG] Input to TransPoolingEncoder: {node_feature.shape}")
             node_feature, assignment = atten(node_feature)
             assignments.append(assignment)
 
         node_feature = self.dim_reduction(node_feature)
 
         node_feature = node_feature.reshape((bz, -1))
-        print("BNT logits:", node_feature[:5])
+        # print("BNT logits:", node_feature[:5])
         return self.fc(node_feature)
     
     def extract_features(self, time_series, node_feature):
