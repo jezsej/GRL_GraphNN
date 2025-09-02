@@ -11,7 +11,7 @@ import torch.nn.functional as F
 
 
 class InterpretableTransformerEncoder(TransformerEncoderLayer):
-    def __init__(self, d_model, nhead, dim_feedforward=2048, dropout=0.1, activation=F.relu,
+    def __init__(self, d_model, nhead, dim_feedforward=2048, dropout=0.1, activation='relu',
                  layer_norm_eps=1e-5, batch_first=False, norm_first=False,
                  device=None, dtype=None) -> None:
         super().__init__(d_model, nhead, dim_feedforward, dropout, activation,

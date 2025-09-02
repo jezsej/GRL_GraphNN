@@ -3,6 +3,7 @@ import torch
 import torch.nn.functional as F
 import numpy as np
 import pandas as pd
+from copy import deepcopy
 from torch_geometric.loader import DataLoader
 from torch_geometric.nn import global_mean_pool
 from sklearn.metrics import (
@@ -19,6 +20,7 @@ import wandb
 import copy
 from models.domain_adaptation.components import GRLScheduler
 from utils.logging_utils import wandb_log
+from training.trainers.training_scheduler import get_scheduler
 
 
 class LOSOTrainer:
@@ -29,6 +31,15 @@ class LOSOTrainer:
         self.config = config
         self.site_names = site_names
 
+        #lr scheduler
+        self.lr_scheduler_cfg = config.optimizer.lr_scheduler
+        self.base_lr = self.lr_scheduler_cfg.base_lr
+        self.target_lr = self.lr_scheduler_cfg.target_lr
+        self.total_epochs = self.config.training.epochs
+
+        self.lr_scheduler = get_scheduler(self.optimizer, self.lr_scheduler_cfg, self.total_epochs * len(site_names)) #total steps = epochs * batches per epoch
+        print(f"[INFO] LR Scheduler: {self.lr_scheduler_cfg.mode} with base lr {self.base_lr}, target lr {self.target_lr}, total epochs {self.total_epochs}")
+        
         self.use_grl = self.config.domain_adaptation.use_grl
         self.grl_lambda = self.config.domain_adaptation.grl_lambda
         self.domain_weight = self.config.domain_adaptation.domain_loss_weight
@@ -77,19 +88,9 @@ class LOSOTrainer:
             batch.pseudo = pseudo
             return self.model(batch.x, batch.edge_index, batch.batch, batch.edge_attr, batch.pseudo)
         elif self.config.models.name == "BrainNetworkTransformer":
+            fc_profiles = batch.x.view(batch.num_graphs, self.config.dataset.num_nodes, -1)
             time_series = batch.time_series
-            node_feature = batch.x
-            
-            assert node_feature is not None, "batch.x is None"
-            assert node_feature.dim() == 2, f"Expected 2D node features (N*F), got {node_feature.shape}"
-            assert node_feature.shape[0] == batch.num_graphs * self.config.dataset.num_nodes, \
-                f"Expected shape[0] = {batch.num_graphs * self.config.dataset.num_nodes}, got {node_feature.shape[0]}"
-
-            node_feature = node_feature.view(batch.num_graphs, self.config.dataset.num_nodes, -1)
-            print(f"[DEBUG] node_feature reshaped: {node_feature.shape}")
-
-
-            return self.model(time_series, node_feature)
+            return self.model(time_series, fc_profiles)
         else:
             return self.model(batch)
         
@@ -139,7 +140,45 @@ class LOSOTrainer:
         td = labels.count(0)
         print(f"[{name}] Total: {total}, ASD: {asd}, TD: {td}")
         return asd, td
+    
+    def debug_overlap(self, train, test):
+        train_ids = {id(g) for g in train}
+        test_ids = {id(g) for g in test}
+        overlap = train_ids & test_ids
+        if overlap:
+            print(f"[LEAK DETECTED] {len(overlap)} overlapping graphs between train and test!")
+        else:
+            print("[✓] No train-test overlap detected.")
 
+    def debug_edge(self, train, test):
+        def hash_graph(g):
+            return (
+                g.x.cpu().numpy().tobytes() if hasattr(g, 'x') else b'',
+                g.edge_index.cpu().numpy().tobytes() if hasattr(g, 'edge_index') else b'',
+                g.edge_attr.cpu().numpy().tobytes() if hasattr(g, 'edge_attr') else b'',
+                g.y.item() if hasattr(g, 'y') else None
+            )
+
+        train_hashes = {hash_graph(g) for g in train}
+        test_hashes = {hash_graph(g) for g in test}
+        overlap = train_hashes & test_hashes
+
+        if overlap:
+            print(f"[LEAK DETECTED] {len(overlap)} overlapping graphs between train and test (by value)!")
+        else:
+            print("[✓] No train-test overlap detected (by value).")
+    
+    def train(self, site_data):
+        """
+        Wrapper method to switch between LOSO and single-site training.
+        """
+        if len(self.site_names) == 1:
+            print(f"[INFO] Detected single site '{self.site_names[0]}'. Using single-site training...")
+            return self.train_single_site(site_data)
+        else:
+            print(f"[INFO] Detected multiple sites: {self.site_names}. Using LOSO training...")
+            return self.train_loso(site_data)
+        
     def train_loso(self, site_data):
         print(f"Training on site: {site_data}...")
 
@@ -147,12 +186,17 @@ class LOSOTrainer:
         num_threads = int(os.environ.get("SLURM_CPUS_PER_TASK", os.cpu_count()))
         torch.set_num_threads(num_threads)
         os.environ["OMP_NUM_THREADS"] = str(num_threads)
+        
+        num_threads = 1 if self.device.type == 'cuda' else num_threads  # limit to 1 if using GPU
+
         print(f"[INFO] Using {num_threads // 8} CPU threads for training")
+
 
         results = {}
         all_y_true = []
         all_y_score = []
         metrics_summary = []
+        val_metrics = {}
         run = None
 
         for held_out_site in self.site_names:
@@ -165,14 +209,14 @@ class LOSOTrainer:
                 reinit=True
             )
 
-            train_graphs, val_graphs, test_graphs = [], [], site_data[held_out_site]
+            train_graphs, val_graphs, test_graphs = [], [], deepcopy(site_data[held_out_site])
             # domain_labels = []
 
             domain_counter = 0
             for site in self.site_names:
                 if site == held_out_site:
                     continue
-                site_graphs = site_data[site]
+                site_graphs = deepcopy(site_data[site])
 
                 for g in site_graphs:
                     g.domain = torch.tensor([domain_counter], dtype=torch.long).to(self.device) # assign domain label to each graph
@@ -186,13 +230,17 @@ class LOSOTrainer:
 
             # multiple workers for data loading to improve CPU throughput
             print(f"[DEBUG] Domain labels in training graphs: {set([g.domain.item() for g in train_graphs])}")
-            num_workers = min(4, num_threads // 8)  # limit to avoid too many threads
+            
+            self.debug_overlap(train_graphs, test_graphs)
+            self.debug_edge(train_graphs, test_graphs)
+            num_workers = min(4, num_threads // 8) 
             train_loader = DataLoader(train_graphs, batch_size=self.config.dataset.batch_size, shuffle=True, num_workers=num_workers)
             val_loader = DataLoader(val_graphs, batch_size=self.config.dataset.batch_size, shuffle=False, num_workers=num_workers)
             held_out_idx = self.site_names.index(held_out_site)
             for g in test_graphs:
                 g.domain = torch.tensor([held_out_idx], dtype=torch.long).to(self.device)
-
+            self.debug_overlap(val_graphs, test_graphs)
+            self.debug_edge(val_graphs, test_graphs)
             test_loader = DataLoader(test_graphs, batch_size=self.config.dataset.batch_size, shuffle=False, num_workers=num_workers)
 
             # domain_labels = torch.tensor(domain_labels).to(self.device)
@@ -233,14 +281,20 @@ class LOSOTrainer:
             for epoch in tqdm(range(self.config.training.epochs), desc=f"[Training] {held_out_site}"):
                 train_loss = self.train_epoch(train_loader, held_out_site, epoch)
 
-                val_auc, val_loss, val_acc = self.validate(val_loader, held_out_site)
+                val_auc, val_loss, val_acc = self.validate(val_loader)
                 wandb_log({
                     f"{held_out_site}/val_auc": val_auc,
                     f"{held_out_site}/val_loss": val_loss,
                     f"{held_out_site}/val_acc": val_acc,
                     f"{held_out_site}/train_loss": train_loss,
-                    "epoch": epoch
+                    "epoch": epoch,
+                    "val_auc": float(val_auc)
                 })
+                val_metrics[held_out_site] = {
+                    "auc": float(val_auc),
+                    "loss": float(val_loss),
+                    "acc": float(val_acc)
+                }
 
                 if val_auc > best_auc + min_delta:
                     best_auc = val_auc
@@ -251,14 +305,25 @@ class LOSOTrainer:
                     if stop_counter >= patience:
                         print(f"[Early Stopping] Epoch {epoch} for site {held_out_site}")
                         break
+                if self.lr_scheduler is not None:
+                    self.lr_scheduler.step()
                 print(f"Epoch {epoch}: | Train Loss: {train_loss:.4f} | Val Loss: {val_loss:.4f} | Val AUC: {val_auc:.4f} | Val Acc: {val_acc:.4f} | Best Val AUC: {best_auc:.4f} | Patience: {stop_counter}/{patience} | LR: {self.optimizer.param_groups[0]['lr']:.6f} | GRL Lambda: {self.grl_lambda if self.use_grl else 'N/A'}")
-
+                wandb_log({f"{held_out_site}/lr": self.optimizer.param_groups[0]['lr']})
             if best_model is not None:
                 torch.save(best_model, os.path.join(self.best_model_path, f"{self.mode}_{held_out_site}.pt"))
                 self.model.load_state_dict(best_model)
 
             acc, auc, y_true, y_score, sensitivity, specificity, f1, bal_acc = self.evaluate(test_loader, held_out_site, return_scores=True)
-            results[held_out_site] = acc
+            
+            results[held_out_site] = {
+                "accuracy": acc,
+                "auc": auc,
+                "sensitivity": sensitivity,
+                "specificity": specificity,
+                "f1_score": f1,
+                "balanced_accuracy": bal_acc
+            }
+
             all_y_true.append(y_true)
             all_y_score.append(y_score)
             metrics_summary.append({
@@ -302,9 +367,13 @@ class LOSOTrainer:
             "overall/mean_test_f1": mean_metrics["f1_score"],
             "overall/mean_test_bal_acc": mean_metrics["balanced_accuracy"],
         })
+        #save overall mean metrics to a csv
+        mean_metrics_df = pd.DataFrame([mean_metrics])
+        mean_metrics_df.to_csv(f"result/stats/{self.mode}_mean_metrics.csv", index=False)
+        print(f"\n[LOSO] Overall Mean Test Acc: {mean_metrics['accuracy']:.4f}, AUC: {mean_metrics['auc']:.4f}, Sensitivity: {mean_metrics['sensitivity']:.4f}, Specificity: {mean_metrics['specificity']:.4f}, F1: {mean_metrics['f1_score']:.4f}, Bal. Acc: {mean_metrics['balanced_accuracy']:.4f}")
         if run is not None:
             run.finish()
-        return results
+        return [{"site":site, "val_auc":val_metrics[site]["auc"], "val_acc":val_metrics[site]["acc"], "test_acc":results[site]["accuracy"], "test_auc":results[site]["auc"], "test_f1":results[site]["f1_score"], "test_bal_acc":results[site]["balanced_accuracy"]} for site in site_data if site in results]
 
     def train_epoch(self, train_loader, held_out_site, epoch=None):
         print("Training epoch...")
@@ -318,9 +387,10 @@ class LOSOTrainer:
         for batch in train_loader:
             batch = batch.to(self.device)
             self.optimizer.zero_grad()
-
+            # print(f"[TRAIN DEBUG] Transformer input shape: {batch.x.shape} | dtype: {batch.x.dtype} | device: {batch.x.device}")
             out = self.model_forward(batch)
             logits = out[0] if isinstance(out, tuple) else out
+            
             loss_cls = F.cross_entropy(logits, batch.y)
 
             if self.use_grl:
@@ -335,7 +405,7 @@ class LOSOTrainer:
 
                 print(f"[DEBUG] GRL Lambda at step {self.global_step}: {self.grl_lambda} of {self.grl_scheduler.total_steps}")
 
-                print(f"[DEBUG] features input to fc: {features.shape}")
+                # print(f"[DEBUG] features input to fc: {features.shape}")
                 domain_preds = self.domain_discriminator(features, alpha=self.grl_lambda)
                 domain_targets = batch.domain.view(-1).to(self.device)  # shape [B] # get domain labels from graphs in the batch
                 print(f"[DEBUG] Domain preds shape: {domain_preds.shape}, Domain targets shape: {domain_targets.shape}")
@@ -368,6 +438,8 @@ class LOSOTrainer:
         with torch.no_grad():
             for batch in loader:
                 batch = batch.to(self.device)
+                assert batch.x is not None, "batch.x is None during validation"
+                # print(f"[VALIDATE DEBUG] Transformer input shape: {batch.x.shape} | dtype: {batch.x.dtype} | device: {batch.x.device}")
                 out = self.model_forward(batch)
                 logits = out[0] if isinstance(out, tuple) else out
                 probs = F.softmax(logits, dim=1)[:, 1]
@@ -562,7 +634,7 @@ class LOSOTrainer:
     #         val_graphs.extend(val_split)
     #         domain_labels.extend([i] * len(train_split))
 
-    #     num_workers = min(8, num_threads)
+    #     num_workers = min(2, num_threads // 8)
     #     train_loader = DataLoader(train_graphs, batch_size=self.config.dataset.batch_size, shuffle=True, num_workers=num_workers)
     #     val_loader = DataLoader(val_graphs, batch_size=self.config.dataset.batch_size, shuffle=False, num_workers=num_workers)
     #     test_loader = DataLoader(test_graphs, batch_size=self.config.dataset.batch_size, shuffle=False, num_workers=num_workers)
@@ -640,3 +712,135 @@ class LOSOTrainer:
     #         "y_true": y_true,
     #         "y_score": y_score
     #     }
+
+
+    def train_single_site(self, site_data):
+        site_name = list(site_data.keys())[0]
+        print(f"[Single-Site] Training and evaluating only on site: {site_name}")
+
+        # Set thread limits based on SLURM or CPU count
+        num_threads = int(os.environ.get("SLURM_CPUS_PER_TASK", os.cpu_count()))
+        torch.set_num_threads(num_threads)
+        os.environ["OMP_NUM_THREADS"] = str(num_threads)
+        print(f"[INFO] Using {num_threads // 8} CPU threads for training")
+
+        run = wandb.init(
+            project=self.config.logging.project,
+            entity=self.config.logging.entity,
+            name=self.config.logging.run_name + f"-site-{site_name}",
+            config=OmegaConf.to_container(self.config, resolve=True),
+            reinit=True
+        )
+
+        # Split the single site into train, val, test (we reuse full for test)
+        full_graphs = site_data[site_name]
+        train_graphs, val_graphs = self.stratified_split(full_graphs, self.config.dataset.val_split)
+        test_graphs = full_graphs  # or another strategy if separate test set available
+
+        # Assign dummy domain
+        for g in train_graphs + val_graphs + test_graphs:
+            g.domain = torch.tensor([0], dtype=torch.long).to(self.device)
+
+        num_workers = min(4, num_threads // 8)
+        train_loader = DataLoader(train_graphs, batch_size=self.config.dataset.batch_size, shuffle=True, num_workers=num_workers)
+        val_loader = DataLoader(val_graphs, batch_size=self.config.dataset.batch_size, shuffle=False, num_workers=num_workers)
+        test_loader = DataLoader(test_graphs, batch_size=self.config.dataset.batch_size, shuffle=False, num_workers=num_workers)
+
+        if self.config.domain_adaptation.use_grl:
+            total_steps = self.config.training.epochs * len(train_loader)
+            warm_up_steps = self.config.domain_adaptation.grl_warmup_epochs * len(train_loader)
+            ramp_steps = self.config.domain_adaptation.grl_ramp_epochs * len(train_loader)
+            self.grl_scheduler = GRLScheduler(
+                total_steps=total_steps,
+                schedule=self.config.domain_adaptation.grl_schedule,
+                gamma=self.config.domain_adaptation.grl_gamma,
+                warmup_steps=warm_up_steps,
+                ramp_steps=ramp_steps,
+                max_lambda=self.config.domain_adaptation.grl_max_lambda
+            )
+            print(f"[INFO] GRL Scheduler: {self.grl_scheduler.schedule} with max lambda {self.grl_scheduler.max_lambda}, total steps {total_steps}, warmup {warm_up_steps}, ramp {ramp_steps}")
+
+        asd_train, td_train = self.log_distribution("Train", train_graphs)
+        asd_val, td_val = self.log_distribution("Val", val_graphs)
+        asd_test, td_test = self.log_distribution("Test", test_graphs)
+        wandb_log({
+            f"{site_name}/train_asd": asd_train,
+            f"{site_name}/train_td": td_train,
+            f"{site_name}/val_asd": asd_val,
+            f"{site_name}/val_td": td_val,
+            f"{site_name}/test_asd": asd_test,
+            f"{site_name}/test_td": td_test
+        })
+
+        best_auc = 0
+        patience = self.config.models.patience
+        min_delta = self.config.models.min_delta
+        stop_counter = 0
+        best_model = None
+
+        for epoch in tqdm(range(self.config.training.epochs), desc=f"[Training] {site_name}"):
+            train_loss = self.train_epoch(train_loader, site_name, epoch)
+            val_auc, val_loss, val_acc = self.validate(val_loader, site_name)
+
+            wandb_log({
+                f"{site_name}/val_auc": val_auc,
+                f"{site_name}/val_loss": val_loss,
+                f"{site_name}/val_acc": val_acc,
+                f"{site_name}/train_loss": train_loss,
+                "epoch": epoch,
+                "val_auc": float(val_auc)
+            })
+
+            if val_auc > best_auc + min_delta:
+                best_auc = val_auc
+                best_model = copy.deepcopy(self.model.state_dict())
+                stop_counter = 0
+            else:
+                stop_counter += 1
+                if stop_counter >= patience:
+                    print(f"[Early Stopping] Epoch {epoch} for site {site_name}")
+                    break
+            print(f"Epoch {epoch}: | Train Loss: {train_loss:.4f} | Val Loss: {val_loss:.4f} | Val AUC: {val_auc:.4f} | Val Acc: {val_acc:.4f} | Best Val AUC: {best_auc:.4f} | Patience: {stop_counter}/{patience} | LR: {self.optimizer.param_groups[0]['lr']:.6f} | GRL Lambda: {self.grl_lambda if self.use_grl else 'N/A'}")
+
+        if best_model is not None:
+            torch.save(best_model, os.path.join(self.best_model_path, f"{self.mode}_{site_name}.pt"))
+            self.model.load_state_dict(best_model)
+
+        acc, auc, y_true, y_score, sensitivity, specificity, f1, bal_acc = self.evaluate(test_loader, site_name, return_scores=True)
+        wandb_log({
+            f"{site_name}/test_acc": acc,
+            f"{site_name}/test_auc": auc,
+            f"{site_name}/test_sens": sensitivity,
+            f"{site_name}/test_spec": specificity,
+            f"{site_name}/test_f1": f1,
+            f"{site_name}/test_bal_acc": bal_acc
+        })
+
+        print(f"[Single-Site] {site_name} - Test Acc: {acc:.4f}, AUC: {auc:.4f}, Sensitivity: {sensitivity:.4f}, Specificity: {specificity:.4f}, F1: {f1:.4f}, Bal. Acc: {bal_acc:.4f}")
+
+        df = pd.DataFrame([{
+            "site": site_name,
+            "accuracy": acc,
+            "auc": auc,
+            "sensitivity": sensitivity,
+            "specificity": specificity,
+            "f1_score": f1,
+            "balanced_accuracy": bal_acc
+        }])
+        os.makedirs("result/stats", exist_ok=True)
+        df.to_csv(f"result/stats/{self.mode}_metrics_summary.csv", index=False)
+        df.to_csv(f"result/stats/{self.mode}_mean_metrics.csv", index=False)
+
+        if run is not None:
+            run.finish()
+
+        return {"site": site_name,
+                "accuracy": acc,
+                "auc": auc,
+                "sensitivity": sensitivity,
+                "specificity": specificity,
+                "f1_score": f1,
+                "balanced_accuracy": bal_acc,
+                "y_true": y_true,
+                "y_score": y_score
+                }

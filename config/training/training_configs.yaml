@@ -1,2 +1,4 @@
 name: DATrain
 epochs: 100
+seed: 42
+lr:  0.001

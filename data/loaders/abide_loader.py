@@ -124,7 +124,11 @@ def get_abide_dataloaders(config) -> (Dict[str, List[Data]], List[str]):
             mask = (np.abs(mat) >= threshold) & edge_mask
             edge_index = np.array(np.where(mask))
             edge_attr = mat[edge_index[0], edge_index[1]]
-            node_features = np.eye(mat.shape[0], dtype=np.float32)
+            
+            if config.models.name == "BrainNetworkTransformer":
+                node_features = mat.astype(np.float32)
+            else:
+                node_features = np.eye(mat.shape[0], dtype=np.float32)
 
             # --- Labels & Metadata ---
             y = int(row["DX_GROUP"]) - 1
@@ -205,5 +209,5 @@ def get_abide_dataloaders(config) -> (Dict[str, List[Data]], List[str]):
     os.makedirs(os.path.dirname(stats_path), exist_ok=True) # Ensure log directory exists
     stats_df.to_csv(stats_path, index=False) # Save site stats to CSV
     print(f"[SAVED] Site statistics saved to: {stats_path}")
-    wandb.log({"abide_site_stats": wandb.Table(dataframe=stats_df)})
+    # wandb.log({"abide_site_stats": wandb.Table(dataframe=stats_df)})
     return valid_site_data, valid_site_names
