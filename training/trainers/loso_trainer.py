@@ -3,6 +3,7 @@ import torch
 import torch.nn.functional as F
 import numpy as np
 import pandas as pd
+from copy import deepcopy
 from torch_geometric.loader import DataLoader
 from torch_geometric.nn import global_mean_pool
 from sklearn.metrics import (
@@ -140,6 +141,17 @@ class LOSOTrainer:
         print(f"[{name}] Total: {total}, ASD: {asd}, TD: {td}")
         return asd, td
     
+    def debug_overlap(train, test):
+        train_ids = {id(g) for g in train}
+        test_ids = {id(g) for g in test}
+        overlap = train_ids & test_ids
+        if overlap:
+            print(f"[LEAK DETECTED] {len(overlap)} overlapping graphs between train and test!")
+        else:
+            print("[✓] No train-test overlap detected.")
+
+   
+    
     def train(self, site_data):
         """
         Wrapper method to switch between LOSO and single-site training.
@@ -179,14 +191,14 @@ class LOSOTrainer:
                 reinit=True
             )
 
-            train_graphs, val_graphs, test_graphs = [], [], site_data[held_out_site]
+            train_graphs, val_graphs, test_graphs = [], [], deepcopy(site_data[held_out_site])
             # domain_labels = []
 
             domain_counter = 0
             for site in self.site_names:
                 if site == held_out_site:
                     continue
-                site_graphs = site_data[site]
+                site_graphs = deepcopy(site_data[site])
 
                 for g in site_graphs:
                     g.domain = torch.tensor([domain_counter], dtype=torch.long).to(self.device) # assign domain label to each graph
@@ -200,6 +212,9 @@ class LOSOTrainer:
 
             # multiple workers for data loading to improve CPU throughput
             print(f"[DEBUG] Domain labels in training graphs: {set([g.domain.item() for g in train_graphs])}")
+            
+            debug_overlap(train_graphs, test_graphs)
+            debug_overlap(val_graphs, test_graphs)
             num_workers = min(1, num_threads // 8)  # limit to avoid too many threads
             train_loader = DataLoader(train_graphs, batch_size=self.config.dataset.batch_size, shuffle=True, num_workers=num_workers)
             val_loader = DataLoader(val_graphs, batch_size=self.config.dataset.batch_size, shuffle=False, num_workers=num_workers)
@@ -353,7 +368,7 @@ class LOSOTrainer:
         for batch in train_loader:
             batch = batch.to(self.device)
             self.optimizer.zero_grad()
-            print(f"[TRAIN DEBUG] Transformer input shape: {batch.x.shape} | dtype: {batch.x.dtype} | device: {batch.x.device}")
+            # print(f"[TRAIN DEBUG] Transformer input shape: {batch.x.shape} | dtype: {batch.x.dtype} | device: {batch.x.device}")
             out = self.model_forward(batch)
             logits = out[0] if isinstance(out, tuple) else out
             
@@ -405,7 +420,7 @@ class LOSOTrainer:
             for batch in loader:
                 batch = batch.to(self.device)
                 assert batch.x is not None, "batch.x is None during validation"
-                print(f"[VALIDATE DEBUG] Transformer input shape: {batch.x.shape} | dtype: {batch.x.dtype} | device: {batch.x.device}")
+                # print(f"[VALIDATE DEBUG] Transformer input shape: {batch.x.shape} | dtype: {batch.x.dtype} | device: {batch.x.device}")
                 out = self.model_forward(batch)
                 logits = out[0] if isinstance(out, tuple) else out
                 probs = F.softmax(logits, dim=1)[:, 1]
