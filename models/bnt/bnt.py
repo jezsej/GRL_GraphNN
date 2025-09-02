@@ -153,7 +153,7 @@ class BrainNetworkTransformer(BaseModel):
         node_feature = self.dim_reduction(node_feature)
 
         node_feature = node_feature.reshape((bz, -1))
-
+        print("BNT logits:", node_feature[:5])
         return self.fc(node_feature)
     
     def extract_features(self, time_series, node_feature):

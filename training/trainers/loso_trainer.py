@@ -87,9 +87,9 @@ class LOSOTrainer:
             batch.pseudo = pseudo
             return self.model(batch.x, batch.edge_index, batch.batch, batch.edge_attr, batch.pseudo)
         elif self.config.models.name == "BrainNetworkTransformer":
-            node_feature = batch.x.view(batch.num_graphs, self.config.dataset.num_nodes, -1)
+            fc_profiles = batch.x.view(batch.num_graphs, self.config.dataset.num_nodes, -1)
             time_series = batch.time_series
-            return self.model(time_series, node_feature)
+            return self.model(time_series, fc_profiles)
         else:
             return self.model(batch)
         
@@ -356,6 +356,7 @@ class LOSOTrainer:
             print(f"[TRAIN DEBUG] Transformer input shape: {batch.x.shape} | dtype: {batch.x.dtype} | device: {batch.x.device}")
             out = self.model_forward(batch)
             logits = out[0] if isinstance(out, tuple) else out
+            
             loss_cls = F.cross_entropy(logits, batch.y)
 
             if self.use_grl:
