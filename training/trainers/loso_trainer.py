@@ -150,7 +150,23 @@ class LOSOTrainer:
         else:
             print("[✓] No train-test overlap detected.")
 
-   
+    def debug_edge(self, train, test):
+        def hash_graph(g):
+            return (
+                g.x.cpu().numpy().tobytes() if hasattr(g, 'x') else b'',
+                g.edge_index.cpu().numpy().tobytes() if hasattr(g, 'edge_index') else b'',
+                g.edge_attr.cpu().numpy().tobytes() if hasattr(g, 'edge_attr') else b'',
+                g.y.item() if hasattr(g, 'y') else None
+            )
+
+        train_hashes = {hash_graph(g) for g in train}
+        test_hashes = {hash_graph(g) for g in test}
+        overlap = train_hashes & test_hashes
+
+        if overlap:
+            print(f"[LEAK DETECTED] {len(overlap)} overlapping graphs between train and test (by value)!")
+        else:
+            print("[✓] No train-test overlap detected (by value).")
     
     def train(self, site_data):
         """
@@ -216,14 +232,15 @@ class LOSOTrainer:
             print(f"[DEBUG] Domain labels in training graphs: {set([g.domain.item() for g in train_graphs])}")
             
             self.debug_overlap(train_graphs, test_graphs)
-            self.debug_overlap(val_graphs, test_graphs)
+            self.debug_edge(train_graphs, test_graphs)
             num_workers = min(4, num_threads // 8) 
             train_loader = DataLoader(train_graphs, batch_size=self.config.dataset.batch_size, shuffle=True, num_workers=num_workers)
             val_loader = DataLoader(val_graphs, batch_size=self.config.dataset.batch_size, shuffle=False, num_workers=num_workers)
             held_out_idx = self.site_names.index(held_out_site)
             for g in test_graphs:
                 g.domain = torch.tensor([held_out_idx], dtype=torch.long).to(self.device)
-
+            self.debug_overlap(val_graphs, test_graphs)
+            self.debug_edge(val_graphs, test_graphs)
             test_loader = DataLoader(test_graphs, batch_size=self.config.dataset.batch_size, shuffle=False, num_workers=num_workers)
 
             # domain_labels = torch.tensor(domain_labels).to(self.device)
@@ -264,7 +281,7 @@ class LOSOTrainer:
             for epoch in tqdm(range(self.config.training.epochs), desc=f"[Training] {held_out_site}"):
                 train_loss = self.train_epoch(train_loader, held_out_site, epoch)
 
-                val_auc, val_loss, val_acc = self.validate(val_loader, held_out_site)
+                val_auc, val_loss, val_acc = self.validate(val_loader)
                 wandb_log({
                     f"{held_out_site}/val_auc": val_auc,
                     f"{held_out_site}/val_loss": val_loss,
