@@ -147,6 +147,7 @@ def get_abide_dataloaders(config) -> (Dict[str, List[Data]], List[str]):
             data.age = torch.tensor([age], dtype=torch.float)
             data.sex = torch.tensor([sex], dtype=torch.long)
             data.ados = torch.tensor([ados], dtype=torch.float)
+            data.subject_id = int(row["SUB_ID"])
 
             if dynamic:
                 data.time_series = ts_tensor
@@ -155,8 +156,8 @@ def get_abide_dataloaders(config) -> (Dict[str, List[Data]], List[str]):
 
             data_list.append(data)
 
-        site_data[site] = data_list
-        if len(data_list) == 0:
+     
+        if not data_list:
             print(f"[WARN] Skipping site {site} — no valid data")
             continue
 
