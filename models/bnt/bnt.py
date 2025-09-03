@@ -112,10 +112,10 @@ class BrainNetworkTransformer(BaseModel):
         self.fc = nn.Sequential(
             nn.Linear(8 * sizes[-1], 256),
             nn.LeakyReLU(),
-            nn.Dropout(config.models.dropout)
+            nn.Dropout(config.models.dropout),
             nn.Linear(256, 32),
             nn.LeakyReLU(),
-            nn.Dropout(config.models.dropout)
+            nn.Dropout(config.models.dropout),
             nn.Linear(32, 2)
         )
 
