@@ -103,7 +103,8 @@ class BrainNetworkTransformer(BaseModel):
 
         self.dim_reduction = nn.Sequential(
             nn.Linear(forward_dim, 8),
-            nn.LeakyReLU()
+            nn.LeakyReLU(),
+            nn.Dropout(config.models.dropout)
         )
 
         print(f"[DEBUG] Expected input to fc: {8 * sizes[-1]}")
@@ -111,8 +112,10 @@ class BrainNetworkTransformer(BaseModel):
         self.fc = nn.Sequential(
             nn.Linear(8 * sizes[-1], 256),
             nn.LeakyReLU(),
+            nn.Dropout(config.models.dropout)
             nn.Linear(256, 32),
             nn.LeakyReLU(),
+            nn.Dropout(config.models.dropout)
             nn.Linear(32, 2)
         )
 

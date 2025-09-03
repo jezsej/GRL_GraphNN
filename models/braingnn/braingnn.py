@@ -27,6 +27,7 @@ class Network(torch.nn.Module): #indim, ratio, nclass=2, k=8, R=200
         self.indim = self.cfg.models.indim
         self.ratio = self.cfg.models.pooling_ratio # pooling ratio
         self.nclass = self.cfg.models.nclass
+        self.dropout = self.cfg.models.dropout
         self.dim1 = 32
         self.dim2 = 32
         self.dim3 = 512
@@ -70,9 +71,9 @@ class Network(torch.nn.Module): #indim, ratio, nclass=2, k=8, R=200
 
         x = torch.cat([x1,x2], dim=1)
         x = self.bn1(F.relu(self.fc1(x)))
-        x = F.dropout(x, p=0.5, training=self.training)
+        x = F.dropout(x, p=self.dropout, training=self.training)
         x = self.bn2(F.relu(self.fc2(x)))
-        x= F.dropout(x, p=0.5, training=self.training)
+        x= F.dropout(x, p=self.dropout, training=self.training)
         x = F.log_softmax(self.fc3(x), dim=-1)
 
         return x,self.pool1,self.pool2, torch.sigmoid(score1).view(x.size(0),-1), torch.sigmoid(score2).view(x.size(0),-1)
