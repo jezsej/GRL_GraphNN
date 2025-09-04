@@ -25,7 +25,7 @@ class TransPoolingEncoder(nn.Module):
     Output size: (batch_size, output_node_num, input_feature_size)
     """
 
-    def __init__(self, input_feature_size, input_node_num, hidden_size, output_node_num, pooling=True, orthogonal=True, freeze_center=False, project_assignment=True):
+    def __init__(self, input_feature_size, input_node_num, hidden_size, output_node_num, pooling=True, orthogonal=True, freeze_center=False, project_assignment=True,dropout=0.5):
         super().__init__()
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.transformer = InterpretableTransformerEncoder(
@@ -35,6 +35,7 @@ class TransPoolingEncoder(nn.Module):
             batch_first=True,
             device=self.device
         )
+        self.dropout = nn.Dropout(dropout)
        
 
         self.pooling = pooling
@@ -57,6 +58,7 @@ class TransPoolingEncoder(nn.Module):
 
     def forward(self, x):
         x = self.transformer(x)
+        x = self.dropout(x)
         if self.pooling:
             x, assignment = self.dec(x)
             return x, assignment
@@ -77,6 +79,9 @@ class BrainNetworkTransformer(BaseModel):
 
         self.attention_list = nn.ModuleList()
         forward_dim = config.dataset.num_nodes
+        self.dropout = config.models.dropout
+
+        print(f"[DEBUG] BNT initialized with forward_dim: {forward_dim}, num_nodes: {config.dataset.num_nodes}, dropout: {self.dropout}")
 
         self.pos_encoding = config.models.pos_encoding
         if self.pos_encoding == 'identity':
@@ -99,12 +104,14 @@ class BrainNetworkTransformer(BaseModel):
                                     pooling=do_pooling[index],
                                     orthogonal=config.models.orthogonal,
                                     freeze_center=config.models.freeze_center,
-                                    project_assignment=config.models.project_assignment))
+                                    project_assignment=config.models.project_assignment,
+                                    dropout=self.dropout
+                                    ))
 
         self.dim_reduction = nn.Sequential(
             nn.Linear(forward_dim, 8),
             nn.LeakyReLU(),
-            nn.Dropout(config.models.dropout)
+            nn.Dropout( self.dropout)
         )
 
         print(f"[DEBUG] Expected input to fc: {8 * sizes[-1]}")
@@ -112,10 +119,10 @@ class BrainNetworkTransformer(BaseModel):
         self.fc = nn.Sequential(
             nn.Linear(8 * sizes[-1], 256),
             nn.LeakyReLU(),
-            nn.Dropout(config.models.dropout),
+            nn.Dropout(self.dropout),
             nn.Linear(256, 32),
             nn.LeakyReLU(),
-            nn.Dropout(config.models.dropout),
+            nn.Dropout(self.dropout),
             nn.Linear(32, 2)
         )
 
